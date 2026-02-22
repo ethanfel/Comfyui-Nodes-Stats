@@ -88,6 +88,7 @@ async function showStatsDialog() {
   const considerRemoving = custom.filter((p) => p.status === "consider_removing");
   const unusedNew = custom.filter((p) => p.status === "unused_new");
   const used = custom.filter((p) => p.status === "used");
+  const uninstalled = custom.filter((p) => p.status === "uninstalled");
 
   let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
     <h2 style="margin:0;color:#fff;font-size:18px;">Node Package Stats</h2>
@@ -133,6 +134,11 @@ async function showStatsDialog() {
     html += buildTable(used, "used");
   }
 
+  if (uninstalled.length > 0) {
+    html += sectionHeader("Uninstalled", "Previously tracked, no longer installed", "#555");
+    html += buildTable(uninstalled, "uninstalled");
+  }
+
   dialog.innerHTML = html;
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
@@ -168,6 +174,7 @@ const STATUS_COLORS = {
   consider_removing: { bg: "#2a2215", hover: "#3a2e20" },
   unused_new:        { bg: "#1a1a25", hover: "#252530" },
   used:              { bg: "#151a15", hover: "#202a20" },
+  uninstalled:       { bg: "#1a1a1a", hover: "#252525" },
 };
 
 function buildTable(packages, status) {

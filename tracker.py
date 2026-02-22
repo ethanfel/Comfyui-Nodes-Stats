@@ -130,10 +130,12 @@ class UsageTracker:
                 }
             packages[pkg]["total_nodes"] = total
 
-        # For packages that came only from DB (e.g. uninstalled), fill total_nodes
+        # Packages only in DB (not in mapper) are uninstalled/disabled
+        installed_packages = set(node_counts.keys()) | mapper.get_all_packages()
         for pkg, entry in packages.items():
             if "total_nodes" not in entry:
                 entry["total_nodes"] = entry["used_nodes"]
+            entry["installed"] = pkg in installed_packages
 
         # Classify packages by usage recency
         now = datetime.now(timezone.utc)
@@ -142,7 +144,9 @@ class UsageTracker:
         tracking_start = self._get_first_prompt_time()
 
         for entry in packages.values():
-            if entry["total_executions"] > 0:
+            if not entry["installed"]:
+                entry["status"] = "uninstalled"
+            elif entry["total_executions"] > 0:
                 # Used packages: classify by last_seen recency
                 if entry["last_seen"] < two_months_ago:
                     entry["status"] = "safe_to_remove"
