@@ -20,7 +20,7 @@ class NodePackageMapper:
                 # "custom_nodes.PackageName" -> "PackageName"
                 # "comfy_extras.nodes_xyz" -> "__builtin__"
                 # "comfy_api_nodes.xyz" -> "__builtin__"
-                parts = module.split(".", 1)
+                parts = module.split(".")
                 if parts[0] == "custom_nodes" and len(parts) > 1:
                     self._map[class_type] = parts[1]
                 else:
