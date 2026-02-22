@@ -4,28 +4,34 @@ app.registerExtension({
   name: "comfyui.nodes_stats",
 
   async setup() {
-    const btn = document.createElement("button");
-    btn.textContent = "Node Stats";
-    btn.style.cssText =
-      "font-size:14px;padding:4px 12px;cursor:pointer;border:none;border-radius:4px;background:#333;color:#fff;";
-    btn.addEventListener("click", () => showStatsDialog());
+    try {
+      const { ComfyButton } = await import(
+        "../../scripts/ui/components/button.js"
+      );
 
-    // Insert into ComfyUI menu bar
-    const menu = document.querySelector(".comfy-menu .comfy-menu-btns") ||
-      document.querySelector(".comfy-menu");
-    if (menu) {
-      menu.appendChild(btn);
-    } else {
-      // Fallback: wait for menu to appear
-      const observer = new MutationObserver(() => {
-        const m = document.querySelector(".comfy-menu .comfy-menu-btns") ||
-          document.querySelector(".comfy-menu");
-        if (m) {
-          m.appendChild(btn);
-          observer.disconnect();
-        }
+      const btn = new ComfyButton({
+        icon: "bar-chart-2",
+        content: "Node Stats",
+        tooltip: "Show node and package usage statistics",
+        action: () => showStatsDialog(),
+        classList: "comfyui-button comfyui-menu-mobile-collapse",
       });
-      observer.observe(document.body, { childList: true, subtree: true });
+
+      app.menu?.settingsGroup.element.before(btn.element);
+    } catch (e) {
+      console.log(
+        "[nodes-stats] New menu API unavailable, falling back to legacy menu",
+        e
+      );
+
+      const btn = document.createElement("button");
+      btn.textContent = "Node Stats";
+      btn.onclick = () => showStatsDialog();
+
+      const menu = document.querySelector(".comfy-menu");
+      if (menu) {
+        menu.append(btn);
+      }
     }
   },
 });
