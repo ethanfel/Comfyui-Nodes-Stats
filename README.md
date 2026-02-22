@@ -14,8 +14,8 @@ A ComfyUI custom node package that silently tracks which nodes and packages you 
 ## Installation
 
 ```bash
-# Symlink into your custom_nodes directory
-ln -s /path/to/Comfyui_nodes_stats /path/to/ComfyUI/custom_nodes/comfyui-nodes-stats
+cd /path/to/ComfyUI/custom_nodes
+git clone https://github.com/ethanfel/Comfyui-Nodes-Stats.git
 ```
 
 Restart ComfyUI. Tracking starts immediately and silently.
