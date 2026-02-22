@@ -83,37 +83,54 @@ async function showStatsDialog() {
   dialog.style.cssText =
     "background:#1e1e1e;color:#ddd;border-radius:8px;padding:24px;max-width:800px;width:90%;max-height:85vh;overflow-y:auto;font-family:monospace;font-size:13px;";
 
-  const neverUsed = data.filter(
-    (p) => p.never_used && p.package !== "__builtin__"
-  );
-  const used = data.filter(
-    (p) => !p.never_used && p.package !== "__builtin__"
-  );
+  const custom = data.filter((p) => p.package !== "__builtin__");
+  const safeToRemove = custom.filter((p) => p.status === "safe_to_remove");
+  const considerRemoving = custom.filter((p) => p.status === "consider_removing");
+  const unusedNew = custom.filter((p) => p.status === "unused_new");
+  const used = custom.filter((p) => p.status === "used");
 
   let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
     <h2 style="margin:0;color:#fff;font-size:18px;">Node Package Stats</h2>
     <button id="nodes-stats-close" style="background:none;border:none;color:#888;font-size:20px;cursor:pointer;">&times;</button>
   </div>`;
 
-  html += `<div style="display:flex;gap:16px;margin-bottom:20px;">
-    <div style="background:#3a1a1a;padding:8px 16px;border-radius:4px;border-left:3px solid #e44;">
-      <span style="font-size:22px;font-weight:bold;color:#e44;">${neverUsed.length}</span>
-      <span style="color:#c99;margin-left:6px;">never used</span>
+  html += `<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
+    <div style="background:#3a1a1a;padding:8px 14px;border-radius:4px;border-left:3px solid #e44;">
+      <span style="font-size:20px;font-weight:bold;color:#e44;">${safeToRemove.length}</span>
+      <span style="color:#c99;margin-left:6px;">safe to remove</span>
     </div>
-    <div style="background:#1a2a1a;padding:8px 16px;border-radius:4px;border-left:3px solid #4a4;">
-      <span style="font-size:22px;font-weight:bold;color:#4a4;">${used.length}</span>
+    <div style="background:#2a2215;padding:8px 14px;border-radius:4px;border-left:3px solid #e90;">
+      <span style="font-size:20px;font-weight:bold;color:#e90;">${considerRemoving.length}</span>
+      <span style="color:#ca8;margin-left:6px;">consider removing</span>
+    </div>
+    <div style="background:#1a1a2a;padding:8px 14px;border-radius:4px;border-left:3px solid #68f;">
+      <span style="font-size:20px;font-weight:bold;color:#68f;">${unusedNew.length}</span>
+      <span style="color:#99b;margin-left:6px;">unused &lt;1 month</span>
+    </div>
+    <div style="background:#1a2a1a;padding:8px 14px;border-radius:4px;border-left:3px solid #4a4;">
+      <span style="font-size:20px;font-weight:bold;color:#4a4;">${used.length}</span>
       <span style="color:#9c9;margin-left:6px;">used</span>
     </div>
   </div>`;
 
-  if (neverUsed.length > 0) {
-    html += `<h3 style="color:#e44;margin:12px 0 8px;font-size:14px;">Never Used — Safe to Remove</h3>`;
-    html += buildTable(neverUsed, true);
+  if (safeToRemove.length > 0) {
+    html += sectionHeader("Safe to Remove", "Unused for 2+ months", "#e44");
+    html += buildTable(safeToRemove, "safe_to_remove");
+  }
+
+  if (considerRemoving.length > 0) {
+    html += sectionHeader("Consider Removing", "Unused for 1-2 months", "#e90");
+    html += buildTable(considerRemoving, "consider_removing");
+  }
+
+  if (unusedNew.length > 0) {
+    html += sectionHeader("Recently Unused", "Unused for less than 1 month", "#68f");
+    html += buildTable(unusedNew, "unused_new");
   }
 
   if (used.length > 0) {
-    html += `<h3 style="color:#4a4;margin:16px 0 8px;font-size:14px;">Used Packages</h3>`;
-    html += buildTable(used, false);
+    html += sectionHeader("Used", "", "#4a4");
+    html += buildTable(used, "used");
   }
 
   dialog.innerHTML = html;
@@ -139,9 +156,22 @@ async function showStatsDialog() {
   });
 }
 
-function buildTable(packages, isNeverUsed) {
-  const bgColor = isNeverUsed ? "#2a1515" : "#151a15";
-  const hoverColor = isNeverUsed ? "#3a2020" : "#202a20";
+function sectionHeader(title, subtitle, color) {
+  let html = `<h3 style="color:${color};margin:16px 0 8px;font-size:14px;">${title}`;
+  if (subtitle) html += ` <span style="color:#666;font-size:12px;font-weight:normal;">— ${subtitle}</span>`;
+  html += `</h3>`;
+  return html;
+}
+
+const STATUS_COLORS = {
+  safe_to_remove:    { bg: "#2a1515", hover: "#3a2020" },
+  consider_removing: { bg: "#2a2215", hover: "#3a2e20" },
+  unused_new:        { bg: "#1a1a25", hover: "#252530" },
+  used:              { bg: "#151a15", hover: "#202a20" },
+};
+
+function buildTable(packages, status) {
+  const { bg: bgColor, hover: hoverColor } = STATUS_COLORS[status] || STATUS_COLORS.used;
 
   let html = `<table style="width:100%;border-collapse:collapse;margin-bottom:12px;">
     <thead><tr style="color:#888;text-align:left;border-bottom:1px solid #333;">

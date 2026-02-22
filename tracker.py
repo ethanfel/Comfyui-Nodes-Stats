@@ -3,7 +3,7 @@ import logging
 import os
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -129,16 +129,52 @@ class UsageTracker:
                     "last_seen": None,
                 }
             packages[pkg]["total_nodes"] = total
-            packages[pkg]["never_used"] = packages[pkg]["total_executions"] == 0
 
         # For packages that came only from DB (e.g. uninstalled), fill total_nodes
         for pkg, entry in packages.items():
             if "total_nodes" not in entry:
                 entry["total_nodes"] = entry["used_nodes"]
-                entry["never_used"] = False
+
+        # Classify packages by usage recency
+        now = datetime.now(timezone.utc)
+        one_month_ago = (now - timedelta(days=30)).isoformat()
+        two_months_ago = (now - timedelta(days=60)).isoformat()
+        tracking_start = self._get_first_prompt_time()
+
+        for entry in packages.values():
+            if entry["total_executions"] > 0:
+                # Used packages: classify by last_seen recency
+                if entry["last_seen"] < two_months_ago:
+                    entry["status"] = "safe_to_remove"
+                elif entry["last_seen"] < one_month_ago:
+                    entry["status"] = "consider_removing"
+                else:
+                    entry["status"] = "used"
+            else:
+                # Never-used packages: classify by how long we've been tracking
+                if tracking_start is None:
+                    entry["status"] = "unused_new"
+                elif tracking_start < two_months_ago:
+                    entry["status"] = "safe_to_remove"
+                elif tracking_start < one_month_ago:
+                    entry["status"] = "consider_removing"
+                else:
+                    entry["status"] = "unused_new"
 
         result = sorted(packages.values(), key=lambda p: p["total_executions"])
         return result
+
+    def _get_first_prompt_time(self):
+        """Return the timestamp of the earliest recorded prompt, or None."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT MIN(timestamp) FROM prompt_log"
+                ).fetchone()
+                return row[0] if row and row[0] else None
+            finally:
+                conn.close()
 
     def reset(self):
         """Clear all tracked data."""
