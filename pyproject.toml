@@ -5,9 +5,9 @@ version = "1.0.0"
 license = "MIT"
 
 [project.urls]
-Repository = "https://github.com/placeholder/comfyui-nodes-stats"
+Repository = "https://github.com/ethanfel/Comfyui-Nodes-Stats"
 
 [tool.comfy]
-PublisherId = ""
+PublisherId = "ethanfel"
 DisplayName = "Node Usage Stats"
 Icon = ""
