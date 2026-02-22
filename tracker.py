@@ -33,16 +33,19 @@ class UsageTracker:
     def __init__(self, db_path=DB_PATH):
         self._db_path = db_path
         self._lock = threading.Lock()
-        self._init_db()
+        self._initialized = False
 
-    def _init_db(self):
-        with self._lock:
-            conn = sqlite3.connect(self._db_path)
-            try:
-                conn.executescript(SCHEMA)
-                conn.commit()
-            finally:
-                conn.close()
+    def _ensure_db(self):
+        """Create tables on first use. Called under self._lock."""
+        if self._initialized:
+            return
+        conn = sqlite3.connect(self._db_path)
+        try:
+            conn.executescript(SCHEMA)
+            conn.commit()
+        finally:
+            conn.close()
+        self._initialized = True
 
     def _connect(self):
         return sqlite3.connect(self._db_path)
@@ -51,6 +54,7 @@ class UsageTracker:
         """Record usage of a set of class_types from a single prompt execution."""
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
+            self._ensure_db()
             conn = self._connect()
             try:
                 for ct in class_types:
@@ -74,6 +78,7 @@ class UsageTracker:
     def get_node_stats(self):
         """Return raw per-node usage data."""
         with self._lock:
+            self._ensure_db()
             conn = self._connect()
             try:
                 conn.row_factory = sqlite3.Row
@@ -171,6 +176,7 @@ class UsageTracker:
     def _get_first_prompt_time(self):
         """Return the timestamp of the earliest recorded prompt, or None."""
         with self._lock:
+            self._ensure_db()
             conn = self._connect()
             try:
                 row = conn.execute(
@@ -183,6 +189,7 @@ class UsageTracker:
     def reset(self):
         """Clear all tracked data."""
         with self._lock:
+            self._ensure_db()
             conn = self._connect()
             try:
                 conn.execute("DELETE FROM node_usage")
