@@ -14,33 +14,17 @@ app.registerExtension({
   name: "comfyui.nodes_stats",
 
   async setup() {
-    try {
-      const { ComfyButton } = await import(
-        "../../scripts/ui/components/button.js"
-      );
+    const btn = document.createElement("button");
+    btn.innerHTML = STATS_ICON;
+    btn.title = "Node Stats";
+    btn.className = "comfyui-button comfyui-menu-mobile-collapse";
+    btn.onclick = () => showStatsDialog();
+    btn.style.cssText =
+      "display:flex;align-items:center;justify-content:center;padding:6px;cursor:pointer;";
 
-      const btn = new ComfyButton({
-        icon: "bar-chart-2",
-        content: "Node Stats",
-        tooltip: "Show node and package usage statistics",
-        action: () => showStatsDialog(),
-        classList: "comfyui-button comfyui-menu-mobile-collapse",
-      });
-
-      app.menu?.settingsGroup.element.before(btn.element);
-    } catch (e) {
-      console.log(
-        "[nodes-stats] New menu API unavailable, falling back to legacy menu",
-        e
-      );
-
-      const btn = document.createElement("button");
-      btn.innerHTML = STATS_ICON;
-      btn.title = "Node Stats";
-      btn.onclick = () => showStatsDialog();
-      btn.style.cssText =
-        "display:flex;align-items:center;justify-content:center;padding:6px;background:none;border:none;cursor:pointer;color:var(--input-text,#ddd);";
-
+    if (app.menu?.settingsGroup?.element) {
+      app.menu.settingsGroup.element.before(btn);
+    } else {
       const menu = document.querySelector(".comfy-menu");
       if (menu) {
         menu.append(btn);
