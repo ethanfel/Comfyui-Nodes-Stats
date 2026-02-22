@@ -1,5 +1,15 @@
 import { app } from "../../scripts/app.js";
 
+// Bar chart with nodes icon
+const STATS_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3" y="12" width="4" height="9" rx="1"/>
+  <rect x="10" y="7" width="4" height="14" rx="1"/>
+  <rect x="17" y="3" width="4" height="18" rx="1"/>
+  <circle cx="5" cy="8" r="2" fill="currentColor" stroke="none"/>
+  <circle cx="12" cy="3.5" r="2" fill="currentColor" stroke="none"/>
+  <line x1="7" y1="8" x2="10" y2="4.5"/>
+</svg>`;
+
 app.registerExtension({
   name: "comfyui.nodes_stats",
 
@@ -25,8 +35,11 @@ app.registerExtension({
       );
 
       const btn = document.createElement("button");
-      btn.textContent = "Node Stats";
+      btn.innerHTML = STATS_ICON;
+      btn.title = "Node Stats";
       btn.onclick = () => showStatsDialog();
+      btn.style.cssText =
+        "display:flex;align-items:center;justify-content:center;padding:6px;background:none;border:none;cursor:pointer;color:var(--input-text,#ddd);";
 
       const menu = document.querySelector(".comfy-menu");
       if (menu) {

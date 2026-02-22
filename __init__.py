@@ -1,4 +1,5 @@
 import logging
+import threading
 
 from aiohttp import web
 from server import PromptServer
@@ -25,7 +26,11 @@ def on_prompt_handler(json_data):
             if ct:
                 class_types.add(ct)
         if class_types:
-            tracker.record_usage(class_types, mapper)
+            threading.Thread(
+                target=tracker.record_usage,
+                args=(class_types, mapper),
+                daemon=True,
+            ).start()
     except Exception:
         logger.warning("nodes-stats: error recording usage", exc_info=True)
     return json_data
