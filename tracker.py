@@ -30,8 +30,9 @@ CREATE INDEX IF NOT EXISTS idx_prompt_log_timestamp ON prompt_log(timestamp);
 
 
 # Packages excluded from stats (management/meta tools, not real workflow nodes)
+# Compared case-insensitively since directory names vary by how users clone/symlink
 EXCLUDED_PACKAGES = {
-    "ComfyUI-Manager",
+    "comfyui-manager",
     "comfyui-nodes-stats",
 }
 
@@ -178,7 +179,7 @@ class UsageTracker:
                 else:
                     entry["status"] = "unused_new"
 
-        result = [p for p in packages.values() if p["package"] not in EXCLUDED_PACKAGES]
+        result = [p for p in packages.values() if p["package"].lower() not in EXCLUDED_PACKAGES]
         result.sort(key=lambda p: p["total_executions"])
         return result
 
