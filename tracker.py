@@ -29,6 +29,13 @@ CREATE INDEX IF NOT EXISTS idx_prompt_log_timestamp ON prompt_log(timestamp);
 """
 
 
+# Packages excluded from stats (management/meta tools, not real workflow nodes)
+EXCLUDED_PACKAGES = {
+    "ComfyUI-Manager",
+    "comfyui-nodes-stats",
+}
+
+
 class UsageTracker:
     def __init__(self, db_path=DB_PATH):
         self._db_path = db_path
@@ -171,7 +178,8 @@ class UsageTracker:
                 else:
                     entry["status"] = "unused_new"
 
-        result = sorted(packages.values(), key=lambda p: p["total_executions"])
+        result = [p for p in packages.values() if p["package"] not in EXCLUDED_PACKAGES]
+        result.sort(key=lambda p: p["total_executions"])
         return result
 
     def _get_first_prompt_time(self):
