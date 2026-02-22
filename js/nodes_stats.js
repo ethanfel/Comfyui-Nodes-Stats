@@ -92,7 +92,7 @@ async function showStatsDialog() {
       <span style="font-size:20px;font-weight:bold;color:#68f;">${unusedNew.length}</span>
       <span style="color:#99b;margin-left:6px;">unused &lt;1 month</span>
     </div>
-    <div style="background:#1a2a1a;padding:8px 14px;border-radius:4px;border-left:3px solid #4a4;">
+    <div id="nodes-stats-used-badge" style="background:#1a2a1a;padding:8px 14px;border-radius:4px;border-left:3px solid #4a4;cursor:default;user-select:none;">
       <span style="font-size:20px;font-weight:bold;color:#4a4;">${used.length}</span>
       <span style="color:#9c9;margin-left:6px;">used</span>
     </div>
@@ -144,6 +144,25 @@ async function showStatsDialog() {
       }
     });
   });
+
+  // Easter egg: click "used" badge 5 times to show podium
+  let eggClicks = 0;
+  let eggTimer = null;
+  const usedBadge = document.getElementById("nodes-stats-used-badge");
+  if (usedBadge) {
+    usedBadge.addEventListener("click", () => {
+      eggClicks++;
+      clearTimeout(eggTimer);
+      eggTimer = setTimeout(() => (eggClicks = 0), 1500);
+      if (eggClicks >= 5) {
+        eggClicks = 0;
+        const allNodes = custom
+          .flatMap((p) => p.nodes.map((n) => ({ ...n, pkg: p.package })))
+          .sort((a, b) => b.count - a.count);
+        showPodium(allNodes.slice(0, 3), overlay);
+      }
+    });
+  }
 }
 
 function sectionHeader(title, subtitle, color) {
@@ -209,6 +228,126 @@ function buildTable(packages, status) {
 
   html += `</tbody></table>`;
   return html;
+}
+
+// Internal: builds celebratory overlay for top contributors
+function showPodium(top3, overlay) {
+  const existing = document.getElementById("nodes-stats-podium");
+  if (existing) { existing.remove(); return; }
+
+  const colors = ["#FFD700", "#C0C0C0", "#CD7F32"];
+  const heights = [160, 120, 90];
+  const order = [1, 0, 2];
+
+  // SVG characters: champion with cape, cool runner-up, happy bronze
+  const characters = [
+    // Gold: flexing champion with crown and cape
+    `<svg viewBox="0 0 80 100" width="80" height="100" xmlns="http://www.w3.org/2000/svg">
+      <polygon points="28,18 40,6 52,18" fill="#FFD700" stroke="#DAA520" stroke-width="1"/>
+      <polygon points="32,18 36,10 40,18" fill="#FFD700"/><polygon points="40,18 44,10 48,18" fill="#FFD700"/>
+      <circle cx="40" cy="30" r="12" fill="#ffd08a"/>
+      <circle cx="36" cy="28" r="1.5" fill="#333"/><circle cx="44" cy="28" r="1.5" fill="#333"/>
+      <path d="M36,34 Q40,38 44,34" stroke="#333" stroke-width="1.5" fill="none"/>
+      <rect x="32" y="42" width="16" height="24" rx="4" fill="#e44"/>
+      <path d="M32,42 Q24,50 16,42 L24,38 Z" fill="#e44" opacity="0.8"/>
+      <path d="M48,42 Q56,50 64,42 L56,38 Z" fill="#e44" opacity="0.8"/>
+      <rect x="20" y="42" width="6" height="16" rx="3" fill="#ffd08a" transform="rotate(-30,23,50)"/>
+      <rect x="54" y="42" width="6" height="16" rx="3" fill="#ffd08a" transform="rotate(30,57,50)"/>
+      <rect x="34" y="66" width="5" height="16" rx="2" fill="#336"/>
+      <rect x="41" y="66" width="5" height="16" rx="2" fill="#336"/>
+      <text x="40" y="96" text-anchor="middle" font-size="10" fill="#FFD700">GOAT</text>
+    </svg>`,
+    // Silver: sunglasses dude, arms crossed
+    `<svg viewBox="0 0 80 100" width="70" height="88" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="40" cy="30" r="12" fill="#ffd08a"/>
+      <rect x="28" y="26" width="24" height="6" rx="3" fill="#333" opacity="0.85"/>
+      <circle cx="34" cy="29" r="4" fill="#222" opacity="0.6"/><circle cx="46" cy="29" r="4" fill="#222" opacity="0.6"/>
+      <path d="M37,36 L40,38 L43,36" stroke="#333" stroke-width="1.2" fill="none"/>
+      <rect x="32" y="42" width="16" height="22" rx="4" fill="#448"/>
+      <path d="M30,48 Q40,56 50,48" stroke="#ffd08a" stroke-width="5" fill="none" stroke-linecap="round"/>
+      <rect x="34" y="64" width="5" height="14" rx="2" fill="#336"/>
+      <rect x="41" y="64" width="5" height="14" rx="2" fill="#336"/>
+      <text x="40" y="92" text-anchor="middle" font-size="9" fill="#C0C0C0">cool.</text>
+    </svg>`,
+    // Bronze: happy little guy waving
+    `<svg viewBox="0 0 80 100" width="60" height="75" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="40" cy="32" r="11" fill="#ffd08a"/>
+      <circle cx="36" cy="30" r="1.5" fill="#333"/><circle cx="44" cy="30" r="1.5" fill="#333"/>
+      <path d="M35,36 Q40,42 45,36" stroke="#333" stroke-width="1.5" fill="none"/>
+      <ellipse cx="32" cy="34" rx="3" ry="2" fill="#f99" opacity="0.5"/>
+      <ellipse cx="48" cy="34" rx="3" ry="2" fill="#f99" opacity="0.5"/>
+      <rect x="33" y="43" width="14" height="20" rx="4" fill="#4a4"/>
+      <rect x="22" y="38" width="5" height="14" rx="2.5" fill="#ffd08a" transform="rotate(-45,24,38)"/>
+      <rect x="53" y="43" width="5" height="14" rx="2.5" fill="#ffd08a"/>
+      <rect x="35" y="63" width="4" height="13" rx="2" fill="#336"/>
+      <rect x="41" y="63" width="4" height="13" rx="2" fill="#336"/>
+      <text x="40" y="90" text-anchor="middle" font-size="9" fill="#CD7F32">yay!</text>
+    </svg>`,
+  ];
+
+  const podium = document.createElement("div");
+  podium.id = "nodes-stats-podium";
+  podium.style.cssText =
+    "position:absolute;top:0;left:0;width:100%;height:100%;background:radial-gradient(ellipse at center,#1a1a2e 0%,#0a0a12 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:8px;z-index:1;cursor:pointer;overflow:hidden;";
+  podium.addEventListener("click", () => podium.remove());
+
+  // Sparkle particles
+  let sparkles = "";
+  for (let i = 0; i < 20; i++) {
+    const x = Math.random() * 100;
+    const y = Math.random() * 60;
+    const d = (1 + Math.random() * 2).toFixed(1);
+    const o = (0.3 + Math.random() * 0.7).toFixed(2);
+    sparkles += `<div style="position:absolute;left:${x}%;top:${y}%;width:${d}px;height:${d}px;background:#fff;border-radius:50%;opacity:${o};animation:ns-twinkle ${(1 + Math.random() * 2).toFixed(1)}s ease-in-out infinite alternate;"></div>`;
+  }
+
+  let html = `<style>
+    @keyframes ns-twinkle { from { opacity: 0.1; transform: scale(0.5); } to { opacity: 1; transform: scale(1.2); } }
+    @keyframes ns-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+    @keyframes ns-trophy { 0% { transform: scale(0) rotate(-20deg); } 60% { transform: scale(1.2) rotate(5deg); } 100% { transform: scale(1) rotate(0deg); } }
+  </style>`;
+  html += sparkles;
+
+  // Trophy title
+  html += `<div style="animation:ns-trophy 0.6s ease-out;margin-bottom:20px;text-align:center;">
+    <svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+      <path d="M14,8 H34 V20 Q34,32 24,36 Q14,32 14,20 Z" fill="#FFD700" stroke="#DAA520" stroke-width="1.5"/>
+      <path d="M14,12 H8 Q6,12 6,14 V18 Q6,24 14,22" fill="none" stroke="#DAA520" stroke-width="2"/>
+      <path d="M34,12 H40 Q42,12 42,14 V18 Q42,24 34,22" fill="none" stroke="#DAA520" stroke-width="2"/>
+      <rect x="20" y="36" width="8" height="4" fill="#DAA520"/>
+      <rect x="16" y="40" width="16" height="3" rx="1" fill="#DAA520"/>
+      <text x="24" y="26" text-anchor="middle" font-size="14" font-weight="bold" fill="#8B6914">#1</text>
+    </svg>
+    <div style="font-size:20px;font-weight:bold;color:#FFD700;text-shadow:0 0 20px rgba(255,215,0,0.5);">Hall of Fame</div>
+  </div>`;
+
+  // Podium blocks
+  html += `<div style="display:flex;align-items:flex-end;gap:8px;">`;
+
+  for (const i of order) {
+    const node = top3[i];
+    if (!node) continue;
+    const isGold = i === 0;
+    const w = isGold ? 170 : 140;
+    const floatDelay = [0, 0.3, 0.6][i];
+
+    html += `<div style="display:flex;flex-direction:column;align-items:center;width:${w}px;animation:ns-float 3s ease-in-out ${floatDelay}s infinite;">
+      <div style="margin-bottom:-4px;">${characters[i]}</div>
+      <div style="font-size:${isGold ? 13 : 11}px;color:#fff;text-align:center;word-break:break-all;max-width:${w - 10}px;margin-bottom:4px;${isGold ? "font-weight:bold;text-shadow:0 0 10px rgba(255,215,0,0.4);" : ""}">${escapeHtml(node.class_type)}</div>
+      <div style="font-size:10px;color:#666;margin-bottom:6px;">${escapeHtml(node.pkg)}</div>
+      <div style="width:100%;height:${heights[i]}px;background:linear-gradient(to top,${colors[i]}22,${colors[i]}88);border:1px solid ${colors[i]}66;border-bottom:none;border-radius:8px 8px 0 0;display:flex;align-items:center;justify-content:center;flex-direction:column;backdrop-filter:blur(4px);">
+        <div style="font-size:${isGold ? 32 : 24}px;font-weight:bold;color:${colors[i]};text-shadow:0 0 15px ${colors[i]}66;">${i + 1}${["st","nd","rd"][i]}</div>
+        <div style="font-size:16px;color:#fff;opacity:0.8;margin-top:4px;">${node.count.toLocaleString()}x</div>
+      </div>
+    </div>`;
+  }
+
+  html += `</div>`;
+  html += `<div style="color:#444;font-size:10px;margin-top:12px;">click to dismiss</div>`;
+
+  podium.innerHTML = html;
+  overlay.querySelector("div").style.position = "relative";
+  overlay.querySelector("div").appendChild(podium);
 }
 
 function escapeHtml(str) {
