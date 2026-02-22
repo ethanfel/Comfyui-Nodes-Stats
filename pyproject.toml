@@ -1,0 +1,13 @@
+[project]
+name = "comfyui-nodes-stats"
+description = "Track usage statistics for all ComfyUI nodes and packages"
+version = "1.0.0"
+license = "MIT"
+
+[project.urls]
+Repository = "https://github.com/placeholder/comfyui-nodes-stats"
+
+[tool.comfy]
+PublisherId = ""
+DisplayName = "Node Usage Stats"
+Icon = ""
