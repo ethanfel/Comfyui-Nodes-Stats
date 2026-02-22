@@ -136,7 +136,8 @@ class UsageTracker:
             packages[pkg]["total_nodes"] = total
 
         # Packages only in DB (not in mapper) are uninstalled/disabled
-        installed_packages = set(node_counts.keys()) | mapper.get_all_packages()
+        # node_counts already includes all packages from mapper + get_all_packages()
+        installed_packages = set(node_counts.keys())
         for pkg, entry in packages.items():
             if "total_nodes" not in entry:
                 entry["total_nodes"] = entry["used_nodes"]
