@@ -10,6 +10,39 @@
 
 ---
 
+### Task 0: Create test infrastructure
+
+**Files:**
+- Create: `tests/conftest.py`
+
+`folder_paths` and `nodes` are ComfyUI modules unavailable outside a running ComfyUI process. Without stubbing them upfront, any `patch()` call against them raises `ModuleNotFoundError` before the test runs.
+
+**Step 1: Create conftest.py**
+
+```python
+# tests/conftest.py
+import sys
+import os
+from unittest.mock import MagicMock
+
+# Put the project root on sys.path so tests can import tracker, mapper directly
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+# Stub ComfyUI-only modules before any test file imports project code
+for mod in ("folder_paths", "nodes", "server", "folder_paths.folder_names_and_paths"):
+    if mod not in sys.modules:
+        sys.modules[mod] = MagicMock()
+```
+
+**Step 2: Commit**
+
+```bash
+git add tests/conftest.py
+git commit -m "test: add conftest with ComfyUI module stubs"
+```
+
+---
+
 ### Task 1: Extend tracker.py — model_usage schema + methods
 
 **Files:**
@@ -347,10 +380,13 @@ FAKE_FILES = {
 
 
 def _make_mapper():
+    # conftest.py already put a MagicMock in sys.modules["folder_paths"],
+    # so we can configure it directly here.
+    import folder_paths as fp
+    fp.folder_names_and_paths = FAKE_FOLDER_NAMES
+    fp.get_filename_list.side_effect = lambda t: FAKE_FILES.get(t, [])
     m = ModelMapper()
-    with patch("folder_paths.folder_names_and_paths", FAKE_FOLDER_NAMES), \
-         patch("folder_paths.get_filename_list", side_effect=lambda t: FAKE_FILES.get(t, [])):
-        m._build()
+    m._build()
     return m
 
 
@@ -528,8 +564,9 @@ def test_extract_models_from_prompt():
         }
     }
 
-    with patch("nodes.NODE_CLASS_MAPPINGS", {"CheckpointLoaderSimple": fake_node_cls}):
-        results = m.extract_models_from_prompt(fake_prompt)
+    import nodes as comfy_nodes
+    comfy_nodes.NODE_CLASS_MAPPINGS = {"CheckpointLoaderSimple": fake_node_cls}
+    results = m.extract_models_from_prompt(fake_prompt)
 
     assert ("dream.safetensors", "checkpoints") in results
 
@@ -545,8 +582,9 @@ def test_extract_models_skips_non_list_inputs():
     }
     fake_prompt = {"1": {"class_type": "CLIPTextEncode", "inputs": {"text": "hello"}}}
 
-    with patch("nodes.NODE_CLASS_MAPPINGS", {"CLIPTextEncode": fake_node_cls}):
-        results = m.extract_models_from_prompt(fake_prompt)
+    import nodes as comfy_nodes
+    comfy_nodes.NODE_CLASS_MAPPINGS = {"CLIPTextEncode": fake_node_cls}
+    results = m.extract_models_from_prompt(fake_prompt)
 
     assert results == []
 ```
@@ -595,7 +633,7 @@ Replace the existing `on_prompt_handler` function:
 
 ```python
 def on_prompt_handler(json_data):
-    """Called on every prompt submission. Extracts class_types and model files."""
+    """Called on every prompt submission. Extracts class_types and queues recording."""
     try:
         prompt = json_data.get("prompt", {})
         class_types = set()
@@ -604,10 +642,11 @@ def on_prompt_handler(json_data):
             if ct:
                 class_types.add(ct)
         if class_types:
-            models = model_mapper.extract_models_from_prompt(prompt)
+            # Pass the full prompt to the thread — model extraction (which calls
+            # INPUT_TYPES() on every node) happens off the main request thread.
             threading.Thread(
                 target=_record_prompt,
-                args=(class_types, models),
+                args=(class_types, prompt),
                 daemon=True,
             ).start()
     except Exception:
@@ -615,8 +654,9 @@ def on_prompt_handler(json_data):
     return json_data
 
 
-def _record_prompt(class_types, models):
+def _record_prompt(class_types, prompt):
     tracker.record_usage(class_types, mapper)
+    models = model_mapper.extract_models_from_prompt(prompt)
     if models:
         tracker.record_model_usage(models)
 ```
@@ -700,14 +740,14 @@ async function showStatsDialog() {
 After the existing `let html = ...` header block (the title + close button), replace the rest of the dialog HTML building with:
 
 ```javascript
-  // Tab switcher
+  // Tab switcher — no onclick attributes, wired via addEventListener after insertion
   html += `
   <div style="display:flex;gap:0;margin-bottom:20px;border-bottom:1px solid #333;">
-    <button id="ns-tab-nodes" onclick="nsShowTab('nodes')"
+    <button id="ns-tab-nodes"
       style="background:none;border:none;border-bottom:2px solid #4a4;color:#4a4;padding:8px 18px;cursor:pointer;font-family:monospace;font-size:13px;font-weight:bold;">
       Nodes
     </button>
-    <button id="ns-tab-models" onclick="nsShowTab('models')"
+    <button id="ns-tab-models"
       style="background:none;border:none;border-bottom:2px solid transparent;color:#888;padding:8px 18px;cursor:pointer;font-family:monospace;font-size:13px;">
       Models
     </button>
@@ -727,19 +767,21 @@ After the existing `let html = ...` header block (the title + close button), rep
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
 
-  // Tab switch function (scoped to dialog)
-  window.nsShowTab = function(tab) {
-    document.getElementById("ns-content-nodes").style.display = tab === "nodes" ? "" : "none";
-    document.getElementById("ns-content-models").style.display = tab === "models" ? "" : "none";
-    const nodeBtn = document.getElementById("ns-tab-nodes");
-    const modelBtn = document.getElementById("ns-tab-models");
+  // Tab switch — local function, no window pollution
+  function switchTab(tab) {
+    dialog.querySelector("#ns-content-nodes").style.display = tab === "nodes" ? "" : "none";
+    dialog.querySelector("#ns-content-models").style.display = tab === "models" ? "" : "none";
+    const nodeBtn = dialog.querySelector("#ns-tab-nodes");
+    const modelBtn = dialog.querySelector("#ns-tab-models");
     nodeBtn.style.borderBottomColor = tab === "nodes" ? "#4a4" : "transparent";
     nodeBtn.style.color = tab === "nodes" ? "#4a4" : "#888";
     nodeBtn.style.fontWeight = tab === "nodes" ? "bold" : "normal";
     modelBtn.style.borderBottomColor = tab === "models" ? "#4a4" : "transparent";
     modelBtn.style.color = tab === "models" ? "#4a4" : "#888";
     modelBtn.style.fontWeight = tab === "models" ? "bold" : "normal";
-  };
+  }
+  dialog.querySelector("#ns-tab-nodes").addEventListener("click", () => switchTab("nodes"));
+  dialog.querySelector("#ns-tab-models").addEventListener("click", () => switchTab("models"));
 ```
 
 **Step 3: Extract existing content into buildNodesTabContent()**
