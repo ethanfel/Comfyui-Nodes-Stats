@@ -119,9 +119,7 @@ async function showStatsDialog() {
   dialog.querySelector("#ns-tab-nodes").addEventListener("click", () => switchTab("nodes"));
   dialog.querySelector("#ns-tab-models").addEventListener("click", () => switchTab("models"));
 
-  document
-    .getElementById("nodes-stats-close")
-    .addEventListener("click", () => overlay.remove());
+  dialog.querySelector("#nodes-stats-close").addEventListener("click", () => overlay.remove());
 
   // Toggle expandable rows
   dialog.querySelectorAll(".pkg-row").forEach((row) => {

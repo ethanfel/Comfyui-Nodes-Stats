@@ -143,7 +143,8 @@ class UsageTracker:
                            VALUES (?, ?, 1, ?, ?)
                            ON CONFLICT(model_name) DO UPDATE SET
                                count = count + 1,
-                               last_seen = excluded.last_seen""",
+                               last_seen = excluded.last_seen,
+                               model_type = excluded.model_type""",
                         (model_name, model_type, now, now),
                     )
                 conn.commit()
