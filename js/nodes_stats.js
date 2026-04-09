@@ -34,22 +34,26 @@ app.registerExtension({
 });
 
 async function showStatsDialog() {
-  let data;
+  let data, modelData;
   try {
-    const resp = await fetch("/nodes-stats/packages");
-    if (!resp.ok) {
-      alert("Failed to load node stats: HTTP " + resp.status);
-      return;
-    }
-    data = await resp.json();
-    if (!Array.isArray(data)) {
-      alert("Failed to load node stats: unexpected response format");
+    const [pkgResp, modelResp] = await Promise.all([
+      fetch("/nodes-stats/packages"),
+      fetch("/nodes-stats/models"),
+    ]);
+    if (!pkgResp.ok) { alert("Failed to load node stats: HTTP " + pkgResp.status); return; }
+    if (!modelResp.ok) { alert("Failed to load model stats: HTTP " + modelResp.status); return; }
+    data = await pkgResp.json();
+    modelData = await modelResp.json();
+    if (!Array.isArray(data) || !Array.isArray(modelData)) {
+      alert("Failed to load stats: unexpected response format");
       return;
     }
   } catch (e) {
-    alert("Failed to load node stats: " + e.message);
+    alert("Failed to load stats: " + e.message);
     return;
   }
+
+  const custom = data.filter((p) => p.package !== "__builtin__");
 
   // Remove existing dialog if any
   const existing = document.getElementById("nodes-stats-dialog");
@@ -67,65 +71,53 @@ async function showStatsDialog() {
   dialog.style.cssText =
     "background:#1e1e1e;color:#ddd;border-radius:8px;padding:24px;max-width:800px;width:90%;max-height:85vh;overflow-y:auto;font-family:monospace;font-size:13px;";
 
-  const custom = data.filter((p) => p.package !== "__builtin__");
-  const safeToRemove = custom.filter((p) => p.status === "safe_to_remove");
-  const considerRemoving = custom.filter((p) => p.status === "consider_removing");
-  const unusedNew = custom.filter((p) => p.status === "unused_new");
-  const used = custom.filter((p) => p.status === "used");
-  const uninstalled = custom.filter((p) => p.status === "uninstalled");
-
   let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
     <h2 style="margin:0;color:#fff;font-size:18px;">Node Package Stats</h2>
     <button id="nodes-stats-close" style="background:none;border:none;color:#888;font-size:20px;cursor:pointer;">&times;</button>
   </div>`;
 
-  html += `<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
-    <div style="background:#3a1a1a;padding:8px 14px;border-radius:4px;border-left:3px solid #e44;">
-      <span style="font-size:20px;font-weight:bold;color:#e44;">${safeToRemove.length}</span>
-      <span style="color:#c99;margin-left:6px;">safe to remove</span>
-    </div>
-    <div style="background:#2a2215;padding:8px 14px;border-radius:4px;border-left:3px solid #e90;">
-      <span style="font-size:20px;font-weight:bold;color:#e90;">${considerRemoving.length}</span>
-      <span style="color:#ca8;margin-left:6px;">consider removing</span>
-    </div>
-    <div style="background:#1a1a2a;padding:8px 14px;border-radius:4px;border-left:3px solid #68f;">
-      <span style="font-size:20px;font-weight:bold;color:#68f;">${unusedNew.length}</span>
-      <span style="color:#99b;margin-left:6px;">unused &lt;1 month</span>
-    </div>
-    <div id="nodes-stats-used-badge" style="background:#1a2a1a;padding:8px 14px;border-radius:4px;border-left:3px solid #4a4;cursor:default;user-select:none;">
-      <span style="font-size:20px;font-weight:bold;color:#4a4;">${used.length}</span>
-      <span style="color:#9c9;margin-left:6px;">used</span>
-    </div>
+  // Tab switcher — wired via addEventListener after insertion, no onclick globals
+  html += `
+  <div style="display:flex;gap:0;margin-bottom:20px;border-bottom:1px solid #333;">
+    <button id="ns-tab-nodes"
+      style="background:none;border:none;border-bottom:2px solid #4a4;color:#4a4;padding:8px 18px;cursor:pointer;font-family:monospace;font-size:13px;font-weight:bold;">
+      Nodes
+    </button>
+    <button id="ns-tab-models"
+      style="background:none;border:none;border-bottom:2px solid transparent;color:#888;padding:8px 18px;cursor:pointer;font-family:monospace;font-size:13px;">
+      Models
+    </button>
   </div>`;
 
-  if (safeToRemove.length > 0) {
-    html += sectionHeader("Safe to Remove", "Unused for 2+ months", "#e44");
-    html += buildTable(safeToRemove, "safe_to_remove");
-  }
+  // Nodes tab content (existing content, wrapped)
+  html += `<div id="ns-content-nodes">`;
+  html += buildNodesTabContent(custom);
+  html += `</div>`;
 
-  if (considerRemoving.length > 0) {
-    html += sectionHeader("Consider Removing", "Unused for 1-2 months", "#e90");
-    html += buildTable(considerRemoving, "consider_removing");
-  }
-
-  if (unusedNew.length > 0) {
-    html += sectionHeader("Recently Unused", "Unused for less than 1 month", "#68f");
-    html += buildTable(unusedNew, "unused_new");
-  }
-
-  if (used.length > 0) {
-    html += sectionHeader("Used", "", "#4a4");
-    html += buildTable(used, "used");
-  }
-
-  if (uninstalled.length > 0) {
-    html += sectionHeader("Uninstalled", "Previously tracked, no longer installed", "#555");
-    html += buildTable(uninstalled, "uninstalled");
-  }
+  // Models tab content
+  html += `<div id="ns-content-models" style="display:none;">`;
+  html += buildModelsTabContent(modelData);
+  html += `</div>`;
 
   dialog.innerHTML = html;
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
+
+  // Tab switch — local function, no window pollution
+  function switchTab(tab) {
+    dialog.querySelector("#ns-content-nodes").style.display = tab === "nodes" ? "" : "none";
+    dialog.querySelector("#ns-content-models").style.display = tab === "models" ? "" : "none";
+    const nodeBtn = dialog.querySelector("#ns-tab-nodes");
+    const modelBtn = dialog.querySelector("#ns-tab-models");
+    nodeBtn.style.borderBottomColor = tab === "nodes" ? "#4a4" : "transparent";
+    nodeBtn.style.color = tab === "nodes" ? "#4a4" : "#888";
+    nodeBtn.style.fontWeight = tab === "nodes" ? "bold" : "normal";
+    modelBtn.style.borderBottomColor = tab === "models" ? "#4a4" : "transparent";
+    modelBtn.style.color = tab === "models" ? "#4a4" : "#888";
+    modelBtn.style.fontWeight = tab === "models" ? "bold" : "normal";
+  }
+  dialog.querySelector("#ns-tab-nodes").addEventListener("click", () => switchTab("nodes"));
+  dialog.querySelector("#ns-tab-models").addEventListener("click", () => switchTab("models"));
 
   document
     .getElementById("nodes-stats-close")
@@ -163,6 +155,116 @@ async function showStatsDialog() {
       }
     });
   }
+}
+
+function buildNodesTabContent(custom) {
+  const safeToRemove     = custom.filter((p) => p.status === "safe_to_remove");
+  const considerRemoving = custom.filter((p) => p.status === "consider_removing");
+  const unusedNew        = custom.filter((p) => p.status === "unused_new");
+  const used             = custom.filter((p) => p.status === "used");
+  const uninstalled      = custom.filter((p) => p.status === "uninstalled");
+
+  let html = `<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
+    <div style="background:#3a1a1a;padding:8px 14px;border-radius:4px;border-left:3px solid #e44;">
+      <span style="font-size:20px;font-weight:bold;color:#e44;">${safeToRemove.length}</span>
+      <span style="color:#c99;margin-left:6px;">safe to remove</span>
+    </div>
+    <div style="background:#2a2215;padding:8px 14px;border-radius:4px;border-left:3px solid #e90;">
+      <span style="font-size:20px;font-weight:bold;color:#e90;">${considerRemoving.length}</span>
+      <span style="color:#ca8;margin-left:6px;">consider removing</span>
+    </div>
+    <div style="background:#1a1a2a;padding:8px 14px;border-radius:4px;border-left:3px solid #68f;">
+      <span style="font-size:20px;font-weight:bold;color:#68f;">${unusedNew.length}</span>
+      <span style="color:#99b;margin-left:6px;">unused &lt;1 month</span>
+    </div>
+    <div id="nodes-stats-used-badge" style="background:#1a2a1a;padding:8px 14px;border-radius:4px;border-left:3px solid #4a4;cursor:default;user-select:none;">
+      <span style="font-size:20px;font-weight:bold;color:#4a4;">${used.length}</span>
+      <span style="color:#9c9;margin-left:6px;">used</span>
+    </div>
+  </div>`;
+
+  if (safeToRemove.length > 0)     html += sectionHeader("Safe to Remove", "Unused for 2+ months", "#e44")              + buildTable(safeToRemove, "safe_to_remove");
+  if (considerRemoving.length > 0) html += sectionHeader("Consider Removing", "Unused for 1-2 months", "#e90")           + buildTable(considerRemoving, "consider_removing");
+  if (unusedNew.length > 0)        html += sectionHeader("Recently Unused", "Unused for less than 1 month", "#68f")      + buildTable(unusedNew, "unused_new");
+  if (used.length > 0)             html += sectionHeader("Used", "", "#4a4")                                             + buildTable(used, "used");
+  if (uninstalled.length > 0)      html += sectionHeader("Uninstalled", "Previously tracked, no longer installed", "#555") + buildTable(uninstalled, "uninstalled");
+
+  return html;
+}
+
+function buildModelsTabContent(modelData) {
+  // Flatten for summary counts
+  const allModels      = modelData.flatMap((g) => g.models);
+  const safeCount      = allModels.filter((m) => m.status === "safe_to_remove").length;
+  const considerCount  = allModels.filter((m) => m.status === "consider_removing").length;
+  const unusedNewCount = allModels.filter((m) => m.status === "unused_new").length;
+  const usedCount      = allModels.filter((m) => m.status === "used").length;
+
+  let html = `<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
+    <div style="background:#3a1a1a;padding:8px 14px;border-radius:4px;border-left:3px solid #e44;">
+      <span style="font-size:20px;font-weight:bold;color:#e44;">${safeCount}</span>
+      <span style="color:#c99;margin-left:6px;">safe to remove</span>
+    </div>
+    <div style="background:#2a2215;padding:8px 14px;border-radius:4px;border-left:3px solid #e90;">
+      <span style="font-size:20px;font-weight:bold;color:#e90;">${considerCount}</span>
+      <span style="color:#ca8;margin-left:6px;">consider removing</span>
+    </div>
+    <div style="background:#1a1a2a;padding:8px 14px;border-radius:4px;border-left:3px solid #68f;">
+      <span style="font-size:20px;font-weight:bold;color:#68f;">${unusedNewCount}</span>
+      <span style="color:#99b;margin-left:6px;">unused &lt;1 month</span>
+    </div>
+    <div style="background:#1a2a1a;padding:8px 14px;border-radius:4px;border-left:3px solid #4a4;">
+      <span style="font-size:20px;font-weight:bold;color:#4a4;">${usedCount}</span>
+      <span style="color:#9c9;margin-left:6px;">used</span>
+    </div>
+  </div>`;
+
+  if (allModels.length === 0) {
+    html += `<p style="color:#666;">No models tracked yet. Run a workflow to start.</p>`;
+    return html;
+  }
+
+  for (const group of modelData) {
+    if (group.models.length === 0) continue;
+    const title = group.model_type.charAt(0).toUpperCase() + group.model_type.slice(1).replace(/_/g, " ");
+    html += sectionHeader(title, `${group.models.length} model${group.models.length !== 1 ? "s" : ""}`, "#4a4");
+    html += buildModelTable(group.models);
+  }
+
+  return html;
+}
+
+function buildModelTable(models) {
+  let html = `<table style="width:100%;border-collapse:collapse;margin-bottom:12px;">
+    <thead><tr style="color:#888;text-align:left;border-bottom:1px solid #333;">
+      <th style="padding:6px 8px;">Model</th>
+      <th style="padding:6px 8px;text-align:right;">Executions</th>
+      <th style="padding:6px 8px;">Last Used</th>
+      <th style="padding:6px 8px;">Status</th>
+    </tr></thead><tbody>`;
+
+  for (const m of models) {
+    const { bg, hover } = STATUS_COLORS[m.status] || STATUS_COLORS.used;
+    const lastSeen = m.last_seen ? new Date(m.last_seen).toLocaleDateString() : "—";
+    const statusLabel = {
+      safe_to_remove:    { text: "safe to remove",    color: "#e44" },
+      consider_removing: { text: "consider removing", color: "#e90" },
+      unused_new:        { text: "unused <1mo",       color: "#68f" },
+      used:              { text: "used",               color: "#4a4" },
+      uninstalled:       { text: "uninstalled",        color: "#555" },
+    }[m.status] || { text: m.status, color: "#888" };
+
+    html += `<tr style="background:${bg};border-bottom:1px solid #222;"
+      onmouseover="this.style.background='${hover}'" onmouseout="this.style.background='${bg}'">
+      <td style="padding:6px 8px;color:#fff;">${escapeHtml(m.model_name)}</td>
+      <td style="padding:6px 8px;text-align:right;">${m.count}</td>
+      <td style="padding:6px 8px;color:#888;">${lastSeen}</td>
+      <td style="padding:6px 8px;"><span style="color:${statusLabel.color};font-size:11px;">${statusLabel.text}</span></td>
+    </tr>`;
+  }
+
+  html += `</tbody></table>`;
+  return html;
 }
 
 function sectionHeader(title, subtitle, color) {
