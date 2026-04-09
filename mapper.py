@@ -92,7 +92,7 @@ class ModelMapper:
         try:
             import folder_paths
 
-            self._folder_files = {}
+            folder_files = {}
             for folder_type in folder_paths.folder_names_and_paths:
                 if folder_type in EXCLUDED_FOLDER_TYPES:
                     continue
@@ -101,13 +101,17 @@ class ModelMapper:
                 except Exception:
                     files = []
                 if files:
-                    self._folder_files[folder_type] = frozenset(files)
+                    folder_files[folder_type] = frozenset(files)
 
-            # Reverse map: filename -> folder_type (last write wins on collision)
-            self._reverse = {}
-            for folder_type, files in self._folder_files.items():
+            # Build reverse map: filename -> folder_type (last write wins on collision)
+            reverse = {}
+            for folder_type, files in folder_files.items():
                 for f in files:
-                    self._reverse[f] = folder_type
+                    reverse[f] = folder_type
+
+            # Assign atomically only on success
+            self._folder_files = folder_files
+            self._reverse = reverse
 
         except Exception:
             logger.warning("ModelMapper: failed to build model map", exc_info=True)

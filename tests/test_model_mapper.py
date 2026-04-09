@@ -53,7 +53,7 @@ def test_unknown_filename_returns_none():
     assert m.get_model_type("nonexistent.ckpt") is None
 
 
-def test_extract_models_from_prompt():
+def test_extract_models_from_prompt(monkeypatch):
     m = _make_mapper()
 
     fake_node_cls = MagicMock()
@@ -72,13 +72,13 @@ def test_extract_models_from_prompt():
     }
 
     import nodes as comfy_nodes
-    comfy_nodes.NODE_CLASS_MAPPINGS = {"CheckpointLoaderSimple": fake_node_cls}
+    monkeypatch.setattr(comfy_nodes, "NODE_CLASS_MAPPINGS", {"CheckpointLoaderSimple": fake_node_cls})
     results = m.extract_models_from_prompt(fake_prompt)
 
     assert ("dream.safetensors", "checkpoints") in results
 
 
-def test_extract_models_skips_non_list_inputs():
+def test_extract_models_skips_non_list_inputs(monkeypatch):
     m = _make_mapper()
 
     fake_node_cls = MagicMock()
@@ -90,7 +90,7 @@ def test_extract_models_skips_non_list_inputs():
     fake_prompt = {"1": {"class_type": "CLIPTextEncode", "inputs": {"text": "hello"}}}
 
     import nodes as comfy_nodes
-    comfy_nodes.NODE_CLASS_MAPPINGS = {"CLIPTextEncode": fake_node_cls}
+    monkeypatch.setattr(comfy_nodes, "NODE_CLASS_MAPPINGS", {"CLIPTextEncode": fake_node_cls})
     results = m.extract_models_from_prompt(fake_prompt)
 
     assert results == []
