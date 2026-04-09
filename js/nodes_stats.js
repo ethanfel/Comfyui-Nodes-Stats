@@ -72,7 +72,7 @@ async function showStatsDialog() {
     "background:#1e1e1e;color:#ddd;border-radius:8px;padding:24px;max-width:800px;width:90%;max-height:85vh;overflow-y:auto;font-family:monospace;font-size:13px;";
 
   let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-    <h2 style="margin:0;color:#fff;font-size:18px;">Node Package Stats</h2>
+    <h2 style="margin:0;color:#fff;font-size:18px;">Usage Stats</h2>
     <button id="nodes-stats-close" style="background:none;border:none;color:#888;font-size:20px;cursor:pointer;">&times;</button>
   </div>`;
 
@@ -140,7 +140,7 @@ async function showStatsDialog() {
   // Easter egg: click "used" badge 5 times to show podium
   let eggClicks = 0;
   let eggTimer = null;
-  const usedBadge = document.getElementById("nodes-stats-used-badge");
+  const usedBadge = dialog.querySelector("#nodes-stats-used-badge");
   if (usedBadge) {
     usedBadge.addEventListener("click", () => {
       eggClicks++;
