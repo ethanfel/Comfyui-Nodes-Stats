@@ -40,10 +40,16 @@ def on_prompt_handler(json_data):
 
 
 def _record_prompt(class_types, prompt):
-    tracker.record_usage(class_types, mapper)
-    models = model_mapper.extract_models_from_prompt(prompt)
-    if models:
-        tracker.record_model_usage(models)
+    try:
+        tracker.record_usage(class_types, mapper)
+    except Exception:
+        logger.warning("nodes-stats: error recording node usage", exc_info=True)
+    try:
+        models = model_mapper.extract_models_from_prompt(prompt)
+        if models:
+            tracker.record_model_usage(models)
+    except Exception:
+        logger.warning("nodes-stats: error recording model usage", exc_info=True)
 
 
 PromptServer.instance.add_on_prompt_handler(on_prompt_handler)
