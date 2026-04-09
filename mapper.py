@@ -159,23 +159,22 @@ class ModelMapper:
 
             try:
                 input_types = node_cls.INPUT_TYPES()
+                for category in ("required", "optional"):
+                    for input_name, input_def in input_types.get(category, {}).items():
+                        if not isinstance(input_def, (list, tuple)) or not input_def:
+                            continue
+                        # ComfyUI folder dropdowns have a list as their type
+                        if not isinstance(input_def[0], list):
+                            continue
+                        value = node_inputs.get(input_name)
+                        if not isinstance(value, str) or value in seen:
+                            continue
+                        model_type = self.get_model_type(value)
+                        if model_type:
+                            seen.add(value)
+                            results.append((value, model_type))
             except Exception:
                 continue
-
-            for category in ("required", "optional"):
-                for input_name, input_def in input_types.get(category, {}).items():
-                    if not isinstance(input_def, (list, tuple)) or not input_def:
-                        continue
-                    # ComfyUI folder dropdowns have a list as their type
-                    if not isinstance(input_def[0], list):
-                        continue
-                    value = node_inputs.get(input_name)
-                    if not isinstance(value, str) or value in seen:
-                        continue
-                    model_type = self.get_model_type(value)
-                    if model_type:
-                        seen.add(value)
-                        results.append((value, model_type))
 
         return results
 
