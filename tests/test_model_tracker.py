@@ -1,6 +1,8 @@
 import pytest
 import tempfile
 import os
+from unittest.mock import patch
+from datetime import datetime, timezone, timedelta
 from tracker import UsageTracker
 
 
@@ -72,3 +74,30 @@ def test_get_model_stats_sorted_by_status(tracker):
     statuses = [m["status"] for m in models]
     # unused_new (2) comes before used (3) in STATUS_ORDER
     assert statuses.index("unused_new") < statuses.index("used")
+
+
+def test_get_model_stats_safe_to_remove(tracker):
+    """A model last used 70 days ago should be classified safe_to_remove."""
+    tracker.record_model_usage([("old.safetensors", "checkpoints")])
+    installed = {"checkpoints": ["old.safetensors"]}
+
+    # Patch datetime in tracker so "now" is 70 days after last_seen
+    future_now = datetime.now(timezone.utc) + timedelta(days=70)
+    with patch("tracker.datetime") as mock_dt:
+        mock_dt.now.return_value = future_now
+        result = tracker.get_model_stats(installed)
+
+    assert result[0]["models"][0]["status"] == "safe_to_remove"
+
+
+def test_get_model_stats_consider_removing(tracker):
+    """A model last used 40 days ago should be classified consider_removing."""
+    tracker.record_model_usage([("medium.safetensors", "checkpoints")])
+    installed = {"checkpoints": ["medium.safetensors"]}
+
+    future_now = datetime.now(timezone.utc) + timedelta(days=40)
+    with patch("tracker.datetime") as mock_dt:
+        mock_dt.now.return_value = future_now
+        result = tracker.get_model_stats(installed)
+
+    assert result[0]["models"][0]["status"] == "consider_removing"
