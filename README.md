@@ -4,14 +4,16 @@
   <img src="docs/logo.svg" width="120" alt="Node Stats logo">
 </p>
 
-A ComfyUI custom node package that silently tracks which nodes and packages you actually use. Helps identify unused packages that are safe to remove — keeping your ComfyUI install lean.
+A ComfyUI custom node package that silently tracks which nodes, packages, and model files you actually use. Helps identify unused packages and models that are safe to remove — keeping your ComfyUI install lean.
 
 ## Features
 
 - **Silent tracking** — hooks into every prompt submission, zero config needed
+- **Node & model tracking** — tracks custom node packages and model files (checkpoints, VAEs, ControlNets, etc.) separately
 - **Per-package classification** — packages are sorted into tiers based on usage recency
-- **Smart aging** — packages gradually move from "recently unused" to "safe to remove" over time
-- **Uninstall detection** — removed packages are flagged separately, historical data preserved
+- **Per-model classification** — models grouped by type (checkpoints, vae, …) with the same recency tiers
+- **Smart aging** — items gradually move from "recently unused" to "safe to remove" over time
+- **Uninstall detection** — removed packages/models are flagged separately, historical data preserved
 - **Expandable detail** — click any package to see individual node-level stats
 - **Non-blocking** — DB writes happen in a background thread, no impact on workflow execution
 
@@ -55,11 +57,17 @@ Restart ComfyUI. Tracking starts immediately and silently.
 
 ### UI
 
-Click the **Node Stats** button (bar chart icon) in the ComfyUI top menu bar. A dialog shows:
+Click the **Node Stats** button (bar chart icon) in the ComfyUI top menu bar. A dialog opens with two tabs:
 
-- **Summary bar** with counts for each classification tier
-- **Sections** for each tier, sorted from most actionable to least
-- **Expandable rows** — click any package to see per-node execution counts and timestamps
+**Nodes tab**
+- Summary bar with counts for each classification tier
+- Sections for each tier, sorted from most actionable to least
+- Expandable rows — click any package to see per-node execution counts and timestamps
+
+**Models tab**
+- Summary bar with counts for each tier across all model types
+- Sections per model type (checkpoints, vae, controlnet, …)
+- Per-model table showing execution count, last used date, and status
 
 ### API
 
@@ -67,6 +75,7 @@ Click the **Node Stats** button (bar chart icon) in the ComfyUI top menu bar. A 
 |----------|--------|-------------|
 | `/nodes-stats/packages` | GET | Per-package aggregated stats with classification |
 | `/nodes-stats/usage` | GET | Raw per-node usage data |
+| `/nodes-stats/models` | GET | Per-type model stats with classification |
 | `/nodes-stats/reset` | POST | Clear all tracked data |
 
 ```bash
@@ -114,42 +123,46 @@ curl http://localhost:8188/nodes-stats/packages | python3 -m json.tool
 ## How It Works
 
 ```
-Queue Prompt ──> Prompt Handler ──> Extract class_types ──> Background Thread
-                                                                   │
-                                         ┌─────────────────────────┘
-                                         ▼
-                                    SQLite DB
-                                   usage_stats.db
-                                    ┌──────────┐
-                                    │node_usage │  per-node counts & timestamps
-                                    │prompt_log │  full node list per prompt
-                                    └──────────┘
-                                         │
-            GET /nodes-stats/packages ◄──┘
-                      │
-                      ▼
-               Mapper merges DB data
-               with NODE_CLASS_MAPPINGS
-                      │
-                      ▼
-              Classify by recency ──> JSON response ──> UI Dialog
+Queue Prompt ──> Prompt Handler ──> Extract class_types + prompt ──> Background Thread
+                                                                              │
+                                              ┌───────────────────────────────┘
+                                              ▼
+                                         SQLite DB
+                                        usage_stats.db
+                                         ┌─────────────┐
+                                         │ node_usage  │  per-node counts & timestamps
+                                         │ prompt_log  │  full node list per prompt
+                                         │ model_usage │  per-model counts & timestamps
+                                         └─────────────┘
+                                              │
+          GET /nodes-stats/packages ◄─────────┤
+          GET /nodes-stats/models   ◄─────────┘
+                    │
+                    ▼
+          Merge DB data with installed
+          nodes/models, classify by recency
+                    │
+                    ▼
+          JSON response ──> UI Dialog (Nodes tab / Models tab)
 ```
 
 1. Registers a prompt handler via `PromptServer.instance.add_on_prompt_handler()`
-2. On every prompt submission, extracts `class_type` from each node in the workflow
+2. On every prompt submission, extracts `class_type` from each node and the full prompt dict
 3. Offloads recording to a background thread (non-blocking)
 4. Maps each class_type to its source package using `RELATIVE_PYTHON_MODULE`
-5. Upserts per-node counts and timestamps into SQLite
-6. On stats request, merges DB data with current node registry and classifies by recency
+5. Detects model file selections by introspecting each node's `INPUT_TYPES()` for folder-dropdown inputs, then resolves filenames via `folder_paths`
+6. Upserts per-node and per-model counts and timestamps into SQLite
+7. On stats request, merges DB data with current node registry / installed models and classifies by recency
 
 ## Data Storage
 
-All data is stored in `usage_stats.db` in the package directory.
+All data is stored in `<ComfyUI user dir>/nodes_stats/usage_stats.db` (survives extension reinstalls).
 
 | Table | Contents |
 |-------|----------|
 | `node_usage` | Per-node: class_type, package, execution count, first/last seen |
 | `prompt_log` | Per-prompt: timestamp, JSON array of all class_types used |
+| `model_usage` | Per-model: filename, type, execution count, first/last seen |
 
 Use `POST /nodes-stats/reset` to clear all data and start fresh.
 
@@ -157,8 +170,9 @@ Use `POST /nodes-stats/reset` to clear all data and start fresh.
 
 ```
 __init__.py        Entry point: prompt handler, API routes
-mapper.py          class_type → package name mapping
+mapper.py          class_type → package mapping; model filename → type mapping
 tracker.py         SQLite persistence and stats aggregation
-js/nodes_stats.js  Frontend: menu button + stats dialog
+js/nodes_stats.js  Frontend: menu button + stats dialog (Nodes/Models tabs)
 pyproject.toml     Package metadata
+tests/             Unit tests for tracker and mapper
 ```
