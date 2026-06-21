@@ -722,6 +722,31 @@ async function handleEnable(pkg, temporary, dialog) {
   }
 }
 
+// Missing packages are deferred to ComfyUI Manager — the design treats "Missing"
+// as handled by Manager like always, and Manager already surfaces missing nodes
+// on workflow load. We intentionally do NOT replicate install: a not-installed
+// pack's exact spec can't be resolved reliably client-side (mode=local getlist
+// exposes no cnr_id and an ambiguous version field, so cnr@latest vs git@unknown
+// can't be chosen without risking "cannot resolve install target"). Instead open
+// Manager's Custom Nodes Manager (which has a built-in Missing filter); if that
+// command isn't available in this ComfyUI build, guide the user to it.
+async function handleInstall(pkg, dialog) {
+  let opened = false;
+  try {
+    const cmd = app?.extensionManager?.command;
+    if (cmd && typeof cmd.execute === "function") {
+      await cmd.execute("Comfy.Manager.CustomNodesManager.ToggleVisibility");
+      opened = true;
+    }
+  } catch { /* fall through to guidance */ }
+  notify(
+    opened
+      ? `Opened ComfyUI Manager — choose the "Missing" filter to install ${pkg}.`
+      : `Install ${pkg} via ComfyUI Manager → "Install Missing Custom Nodes".`,
+    "info"
+  );
+}
+
 function setWorkflowButtonsBusy(dialog, busy) {
   dialog.querySelectorAll(".ns-enable-temp-btn, .ns-enable-perm-btn, .ns-install-btn").forEach((b) => {
     b.disabled = busy;
