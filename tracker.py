@@ -62,6 +62,26 @@ EXCLUDED_PACKAGES = {
 }
 
 
+def _classify_age(timestamp, one_month_ago, two_months_ago, recent_status):
+    """Classify an ISO timestamp into a removal tier.
+
+    Shared by node-package and model classification so both age the same way.
+
+    timestamp: ISO string of the relevant activity — last_seen for items that
+        have been used, or the tracking start time for never-used items. A
+        None timestamp is treated as recent (not enough history to judge).
+    recent_status: status to return when the timestamp is recent — "used" for
+        items with recorded usage, "unused_new" for never-used items.
+    """
+    if timestamp is None:
+        return recent_status
+    if timestamp < two_months_ago:
+        return "safe_to_remove"
+    if timestamp < one_month_ago:
+        return "consider_removing"
+    return recent_status
+
+
 class UsageTracker:
     def __init__(self, db_path=DB_PATH):
         self._db_path = db_path
@@ -245,22 +265,14 @@ class UsageTracker:
                 entry["status"] = "uninstalled"
             elif entry["total_executions"] > 0:
                 # Used packages: classify by last_seen recency
-                if entry["last_seen"] < two_months_ago:
-                    entry["status"] = "safe_to_remove"
-                elif entry["last_seen"] < one_month_ago:
-                    entry["status"] = "consider_removing"
-                else:
-                    entry["status"] = "used"
+                entry["status"] = _classify_age(
+                    entry["last_seen"], one_month_ago, two_months_ago, "used"
+                )
             else:
                 # Never-used packages: classify by how long we've been tracking
-                if tracking_start is None:
-                    entry["status"] = "unused_new"
-                elif tracking_start < two_months_ago:
-                    entry["status"] = "safe_to_remove"
-                elif tracking_start < one_month_ago:
-                    entry["status"] = "consider_removing"
-                else:
-                    entry["status"] = "unused_new"
+                entry["status"] = _classify_age(
+                    tracking_start, one_month_ago, two_months_ago, "unused_new"
+                )
 
         result = [p for p in packages.values() if p["package"].lower() not in EXCLUDED_PACKAGES]
         result.sort(key=lambda p: p["total_executions"])
@@ -296,12 +308,9 @@ class UsageTracker:
                 if model_name in db_models:
                     row = db_models[model_name]
                     last_seen = row["last_seen"]
-                    if last_seen < two_months_ago:
-                        status = "safe_to_remove"
-                    elif last_seen < one_month_ago:
-                        status = "consider_removing"
-                    else:
-                        status = "used"
+                    status = _classify_age(
+                        last_seen, one_month_ago, two_months_ago, "used"
+                    )
                     entry = {
                         "model_name": model_name,
                         "model_type": model_type,
@@ -312,14 +321,9 @@ class UsageTracker:
                         "status": status,
                     }
                 else:
-                    if tracking_start is None:
-                        status = "unused_new"
-                    elif tracking_start < two_months_ago:
-                        status = "safe_to_remove"
-                    elif tracking_start < one_month_ago:
-                        status = "consider_removing"
-                    else:
-                        status = "unused_new"
+                    status = _classify_age(
+                        tracking_start, one_month_ago, two_months_ago, "unused_new"
+                    )
                     entry = {
                         "model_name": model_name,
                         "model_type": model_type,

@@ -15,6 +15,7 @@ A ComfyUI custom node package that silently tracks which nodes, packages, and mo
 - **Smart aging** — items gradually move from "recently unused" to "safe to remove" over time
 - **Uninstall detection** — removed packages/models are flagged separately, historical data preserved
 - **Expandable detail** — click any package to see individual node-level stats
+- **One-click disable** — disable unused packages straight from the dialog via ComfyUI Manager (per-package or in bulk), reversible at any time
 - **Non-blocking** — DB writes happen in a background thread, no impact on workflow execution
 
 ## Package Classification
@@ -63,6 +64,20 @@ Click the **Node Stats** button (bar chart icon) in the ComfyUI top menu bar. A 
 - Summary bar with counts for each classification tier
 - Sections for each tier, sorted from most actionable to least
 - Expandable rows — click any package to see per-node execution counts and timestamps
+- **Disable** buttons on the "Safe to Remove" and "Consider Removing" tiers (see below)
+
+### Disabling unused packages
+
+When [ComfyUI Manager](https://github.com/ltdrdata/ComfyUI-Manager) is installed, the
+"Safe to Remove" and "Consider Removing" sections show a **Disable** button on each
+package, plus a **Disable all** button per section. Disabling:
+
+- Hands off to ComfyUI Manager, which moves the package into `custom_nodes/.disabled/`
+- Is fully reversible — re-enable any package from ComfyUI Manager whenever you like
+- Requires a ComfyUI restart to unload the package from the running session (a banner
+  with a **Restart ComfyUI** button appears after disabling)
+
+If ComfyUI Manager is not installed, the disable buttons are hidden and stats work as before.
 
 **Models tab**
 - Summary bar with counts for each tier across all model types

@@ -10,6 +10,20 @@ const STATS_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="2
   <line x1="7" y1="8" x2="10" y2="4.5"/>
 </svg>`;
 
+// Single source of truth for per-status presentation: badge label, accent
+// color, row background + hover, and summary-card colors. Used by the nodes
+// tab, models tab, and summary bars so they all stay in sync.
+const STATUS_META = {
+  safe_to_remove:    { label: "safe to remove",    color: "#e44", bg: "#2a1515", hover: "#3a2020", summaryBg: "#3a1a1a", summaryText: "#c99" },
+  consider_removing: { label: "consider removing", color: "#e90", bg: "#2a2215", hover: "#3a2e20", summaryBg: "#2a2215", summaryText: "#ca8" },
+  unused_new:        { label: "unused &lt;1mo",    color: "#68f", bg: "#1a1a25", hover: "#252530", summaryBg: "#1a1a2a", summaryText: "#99b" },
+  used:              { label: "used",              color: "#4a4", bg: "#151a15", hover: "#202a20", summaryBg: "#1a2a1a", summaryText: "#9c9" },
+  uninstalled:       { label: "uninstalled",       color: "#555", bg: "#1a1a1a", hover: "#252525", summaryBg: "#1a1a1a", summaryText: "#888" },
+};
+
+// Tiers that may offer a "Disable" action (when ComfyUI Manager is available).
+const DISABLEABLE_TIERS = new Set(["safe_to_remove", "consider_removing"]);
+
 app.registerExtension({
   name: "comfyui.nodes_stats",
 
@@ -34,16 +48,18 @@ app.registerExtension({
 });
 
 async function showStatsDialog() {
-  let data, modelData;
+  let data, modelData, managerInfo;
   try {
-    const [pkgResp, modelResp] = await Promise.all([
+    const [pkgResp, modelResp, mgr] = await Promise.all([
       fetch("/nodes-stats/packages"),
       fetch("/nodes-stats/models"),
+      fetchManagerInfo(),
     ]);
     if (!pkgResp.ok) { alert("Failed to load node stats: HTTP " + pkgResp.status); return; }
     if (!modelResp.ok) { alert("Failed to load model stats: HTTP " + modelResp.status); return; }
     data = await pkgResp.json();
     modelData = await modelResp.json();
+    managerInfo = mgr;
     if (!Array.isArray(data) || !Array.isArray(modelData)) {
       alert("Failed to load stats: unexpected response format");
       return;
@@ -71,14 +87,16 @@ async function showStatsDialog() {
   dialog.style.cssText =
     "background:#1e1e1e;color:#ddd;border-radius:8px;padding:24px;max-width:800px;width:90%;max-height:85vh;overflow-y:auto;font-family:monospace;font-size:13px;";
 
-  let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+  let html = dialogStyle();
+
+  html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
     <h2 style="margin:0;color:#fff;font-size:18px;">Usage Stats</h2>
     <button id="nodes-stats-close" style="background:none;border:none;color:#888;font-size:20px;cursor:pointer;">&times;</button>
   </div>`;
 
   // Tab switcher — wired via addEventListener after insertion, no onclick globals
   html += `
-  <div style="display:flex;gap:0;margin-bottom:20px;border-bottom:1px solid #333;">
+  <div id="ns-tabs" style="display:flex;gap:0;margin-bottom:20px;border-bottom:1px solid #333;">
     <button id="ns-tab-nodes"
       style="background:none;border:none;border-bottom:2px solid #4a4;color:#4a4;padding:8px 18px;cursor:pointer;font-family:monospace;font-size:13px;font-weight:bold;">
       Nodes
@@ -89,9 +107,9 @@ async function showStatsDialog() {
     </button>
   </div>`;
 
-  // Nodes tab content (existing content, wrapped)
+  // Nodes tab content
   html += `<div id="ns-content-nodes">`;
-  html += buildNodesTabContent(custom);
+  html += buildNodesTabContent(custom, managerInfo);
   html += `</div>`;
 
   // Models tab content
@@ -135,6 +153,8 @@ async function showStatsDialog() {
     });
   });
 
+  wireDisableButtons(dialog, managerInfo);
+
   // Easter egg: click "used" badge 5 times to show podium
   let eggClicks = 0;
   let eggTimer = null;
@@ -155,67 +175,105 @@ async function showStatsDialog() {
   }
 }
 
-function buildNodesTabContent(custom) {
-  const safeToRemove     = custom.filter((p) => p.status === "safe_to_remove");
-  const considerRemoving = custom.filter((p) => p.status === "consider_removing");
-  const unusedNew        = custom.filter((p) => p.status === "unused_new");
-  const used             = custom.filter((p) => p.status === "used");
-  const uninstalled      = custom.filter((p) => p.status === "uninstalled");
+// Scoped CSS for the dialog: row backgrounds + hover (replaces inline
+// onmouseover/onmouseout) and the action buttons. Generated from STATUS_META.
+function dialogStyle() {
+  let rows = "";
+  for (const [status, m] of Object.entries(STATUS_META)) {
+    rows += `#nodes-stats-dialog .ns-row-${status}{background:${m.bg};}`;
+    rows += `#nodes-stats-dialog .ns-row-${status}:hover{background:${m.hover};}`;
+  }
+  return `<style>
+    #nodes-stats-dialog .ns-disabled-row{opacity:0.45;}
+    #nodes-stats-dialog .ns-btn{font-family:monospace;font-size:11px;border:1px solid #555;background:#262626;color:#ddd;border-radius:4px;padding:3px 10px;cursor:pointer;white-space:nowrap;}
+    #nodes-stats-dialog .ns-btn:hover:not(:disabled){background:#3a2020;border-color:#e44;color:#fff;}
+    #nodes-stats-dialog .ns-btn:disabled{opacity:0.5;cursor:default;}
+    #nodes-stats-dialog .ns-disable-all-btn{border-color:#a33;color:#e88;}
+    ${rows}
+  </style>`;
+}
 
-  let html = `<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
-    <div style="background:#3a1a1a;padding:8px 14px;border-radius:4px;border-left:3px solid #e44;">
-      <span style="font-size:20px;font-weight:bold;color:#e44;">${safeToRemove.length}</span>
-      <span style="color:#c99;margin-left:6px;">safe to remove</span>
-    </div>
-    <div style="background:#2a2215;padding:8px 14px;border-radius:4px;border-left:3px solid #e90;">
-      <span style="font-size:20px;font-weight:bold;color:#e90;">${considerRemoving.length}</span>
-      <span style="color:#ca8;margin-left:6px;">consider removing</span>
-    </div>
-    <div style="background:#1a1a2a;padding:8px 14px;border-radius:4px;border-left:3px solid #68f;">
-      <span style="font-size:20px;font-weight:bold;color:#68f;">${unusedNew.length}</span>
-      <span style="color:#99b;margin-left:6px;">unused &lt;1 month</span>
-    </div>
-    <div id="nodes-stats-used-badge" style="background:#1a2a1a;padding:8px 14px;border-radius:4px;border-left:3px solid #4a4;cursor:default;user-select:none;">
-      <span style="font-size:20px;font-weight:bold;color:#4a4;">${used.length}</span>
-      <span style="color:#9c9;margin-left:6px;">used</span>
-    </div>
-  </div>`;
+// Summary cards row. items: [{count, status, label, id?}]
+function summaryBar(items) {
+  let html = `<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">`;
+  for (const it of items) {
+    const m = STATUS_META[it.status];
+    const idAttr = it.id ? ` id="${it.id}"` : "";
+    const cursor = it.id ? "cursor:default;user-select:none;" : "";
+    html += `<div${idAttr} style="background:${m.summaryBg};padding:8px 14px;border-radius:4px;border-left:3px solid ${m.color};${cursor}">
+      <span style="font-size:20px;font-weight:bold;color:${m.color};">${it.count}</span>
+      <span style="color:${m.summaryText};margin-left:6px;">${it.label}</span>
+    </div>`;
+  }
+  html += `</div>`;
+  return html;
+}
 
-  if (safeToRemove.length > 0)     html += sectionHeader("Safe to Remove", "Unused for 2+ months", "#e44")              + buildTable(safeToRemove, "safe_to_remove");
-  if (considerRemoving.length > 0) html += sectionHeader("Consider Removing", "Unused for 1-2 months", "#e90")           + buildTable(considerRemoving, "consider_removing");
-  if (unusedNew.length > 0)        html += sectionHeader("Recently Unused", "Unused for less than 1 month", "#68f")      + buildTable(unusedNew, "unused_new");
-  if (used.length > 0)             html += sectionHeader("Used", "", "#4a4")                                             + buildTable(used, "used");
-  if (uninstalled.length > 0)      html += sectionHeader("Uninstalled", "Previously tracked, no longer installed", "#555") + buildTable(uninstalled, "uninstalled");
+function buildNodesTabContent(custom, managerInfo) {
+  const byStatus = (s) => custom.filter((p) => p.status === s);
+  const safeToRemove     = byStatus("safe_to_remove");
+  const considerRemoving = byStatus("consider_removing");
+  const unusedNew        = byStatus("unused_new");
+  const used             = byStatus("used");
+  const uninstalled      = byStatus("uninstalled");
+
+  let html = summaryBar([
+    { count: safeToRemove.length,     status: "safe_to_remove",    label: "safe to remove" },
+    { count: considerRemoving.length, status: "consider_removing", label: "consider removing" },
+    { count: unusedNew.length,        status: "unused_new",        label: "unused &lt;1 month" },
+    { count: used.length,             status: "used",              label: "used", id: "nodes-stats-used-badge" },
+  ]);
+
+  html += renderSection("Safe to Remove", "Unused for 2+ months", "safe_to_remove", safeToRemove, managerInfo);
+  html += renderSection("Consider Removing", "Unused for 1-2 months", "consider_removing", considerRemoving, managerInfo);
+  html += renderSection("Recently Unused", "Unused for less than 1 month", "unused_new", unusedNew, managerInfo);
+  html += renderSection("Used", "", "used", used, managerInfo);
+  html += renderSection("Uninstalled", "Previously tracked, no longer installed", "uninstalled", uninstalled, managerInfo);
 
   return html;
 }
 
-function buildModelsTabContent(modelData) {
-  // Flatten for summary counts
-  const allModels      = modelData.flatMap((g) => g.models);
-  const safeCount      = allModels.filter((m) => m.status === "safe_to_remove").length;
-  const considerCount  = allModels.filter((m) => m.status === "consider_removing").length;
-  const unusedNewCount = allModels.filter((m) => m.status === "unused_new").length;
-  const usedCount      = allModels.filter((m) => m.status === "used").length;
+function renderSection(title, subtitle, status, packages, managerInfo) {
+  if (packages.length === 0) return "";
 
-  let html = `<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
-    <div style="background:#3a1a1a;padding:8px 14px;border-radius:4px;border-left:3px solid #e44;">
-      <span style="font-size:20px;font-weight:bold;color:#e44;">${safeCount}</span>
-      <span style="color:#c99;margin-left:6px;">safe to remove</span>
-    </div>
-    <div style="background:#2a2215;padding:8px 14px;border-radius:4px;border-left:3px solid #e90;">
-      <span style="font-size:20px;font-weight:bold;color:#e90;">${considerCount}</span>
-      <span style="color:#ca8;margin-left:6px;">consider removing</span>
-    </div>
-    <div style="background:#1a1a2a;padding:8px 14px;border-radius:4px;border-left:3px solid #68f;">
-      <span style="font-size:20px;font-weight:bold;color:#68f;">${unusedNewCount}</span>
-      <span style="color:#99b;margin-left:6px;">unused &lt;1 month</span>
-    </div>
-    <div style="background:#1a2a1a;padding:8px 14px;border-radius:4px;border-left:3px solid #4a4;">
-      <span style="font-size:20px;font-weight:bold;color:#4a4;">${usedCount}</span>
-      <span style="color:#9c9;margin-left:6px;">used</span>
-    </div>
-  </div>`;
+  const color = STATUS_META[status].color;
+  const withActions = !!managerInfo && DISABLEABLE_TIERS.has(status);
+  const eligible = withActions
+    ? packages.filter((p) => isDisableEligible(p, managerInfo)).map((p) => p.package)
+    : [];
+
+  let action = "";
+  if (eligible.length > 0) {
+    action = `<button class="ns-btn ns-disable-all-btn" data-pkgs="${escapeAttr(JSON.stringify(eligible))}">Disable all (${eligible.length})</button>`;
+  }
+
+  let html = `<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:16px 0 8px;">
+    <h3 style="color:${color};margin:0;font-size:14px;">${escapeHtml(title)}`;
+  if (subtitle) html += ` <span style="color:#666;font-size:12px;font-weight:normal;">— ${escapeHtml(subtitle)}</span>`;
+  html += `</h3>${action}</div>`;
+
+  html += buildTable(packages, status, withActions, managerInfo);
+  return html;
+}
+
+// A package can be disabled only if ComfyUI Manager knows it (by directory
+// name) and it is currently enabled (active on disk).
+function isDisableEligible(pkg, managerInfo) {
+  if (!managerInfo || !pkg.installed) return false;
+  const info = managerInfo[pkg.package];
+  return !!(info && info.enabled);
+}
+
+function buildModelsTabContent(modelData) {
+  const allModels = modelData.flatMap((g) => g.models);
+  const count = (s) => allModels.filter((m) => m.status === s).length;
+
+  let html = summaryBar([
+    { count: count("safe_to_remove"),    status: "safe_to_remove",    label: "safe to remove" },
+    { count: count("consider_removing"), status: "consider_removing", label: "consider removing" },
+    { count: count("unused_new"),        status: "unused_new",        label: "unused &lt;1 month" },
+    { count: count("used"),              status: "used",              label: "used" },
+  ]);
 
   if (allModels.length === 0) {
     html += `<p style="color:#666;">No models tracked yet. Run a workflow to start.</p>`;
@@ -242,22 +300,14 @@ function buildModelTable(models) {
     </tr></thead><tbody>`;
 
   for (const m of models) {
-    const { bg, hover } = STATUS_COLORS[m.status] || STATUS_COLORS.used;
+    const meta = STATUS_META[m.status] || STATUS_META.used;
     const lastSeen = m.last_seen ? new Date(m.last_seen).toLocaleDateString() : "—";
-    const statusLabel = {
-      safe_to_remove:    { text: "safe to remove",    color: "#e44" },
-      consider_removing: { text: "consider removing", color: "#e90" },
-      unused_new:        { text: "unused <1mo",       color: "#68f" },
-      used:              { text: "used",               color: "#4a4" },
-      uninstalled:       { text: "uninstalled",        color: "#555" },
-    }[m.status] || { text: m.status, color: "#888" };
 
-    html += `<tr style="background:${bg};border-bottom:1px solid #222;"
-      onmouseover="this.style.background='${hover}'" onmouseout="this.style.background='${bg}'">
+    html += `<tr class="ns-row-${m.status}" style="border-bottom:1px solid #222;">
       <td style="padding:6px 8px;color:#fff;">${escapeHtml(m.model_name)}</td>
       <td style="padding:6px 8px;text-align:right;">${m.count}</td>
       <td style="padding:6px 8px;color:#888;">${lastSeen}</td>
-      <td style="padding:6px 8px;"><span style="color:${statusLabel.color};font-size:11px;">${statusLabel.text}</span></td>
+      <td style="padding:6px 8px;"><span style="color:${meta.color};font-size:11px;">${meta.label}</span></td>
     </tr>`;
   }
 
@@ -266,22 +316,14 @@ function buildModelTable(models) {
 }
 
 function sectionHeader(title, subtitle, color) {
-  let html = `<h3 style="color:${color};margin:16px 0 8px;font-size:14px;">${title}`;
-  if (subtitle) html += ` <span style="color:#666;font-size:12px;font-weight:normal;">— ${subtitle}</span>`;
+  let html = `<h3 style="color:${color};margin:16px 0 8px;font-size:14px;">${escapeHtml(title)}`;
+  if (subtitle) html += ` <span style="color:#666;font-size:12px;font-weight:normal;">— ${escapeHtml(subtitle)}</span>`;
   html += `</h3>`;
   return html;
 }
 
-const STATUS_COLORS = {
-  safe_to_remove:    { bg: "#2a1515", hover: "#3a2020" },
-  consider_removing: { bg: "#2a2215", hover: "#3a2e20" },
-  unused_new:        { bg: "#1a1a25", hover: "#252530" },
-  used:              { bg: "#151a15", hover: "#202a20" },
-  uninstalled:       { bg: "#1a1a1a", hover: "#252525" },
-};
-
-function buildTable(packages, status) {
-  const { bg: bgColor, hover: hoverColor } = STATUS_COLORS[status] || STATUS_COLORS.used;
+function buildTable(packages, status, withActions, managerInfo) {
+  const colspan = withActions ? 7 : 6;
 
   let html = `<table style="width:100%;border-collapse:collapse;margin-bottom:12px;">
     <thead><tr style="color:#888;text-align:left;border-bottom:1px solid #333;">
@@ -290,32 +332,36 @@ function buildTable(packages, status) {
       <th style="padding:6px 8px;text-align:right;">Nodes</th>
       <th style="padding:6px 8px;text-align:right;">Used</th>
       <th style="padding:6px 8px;text-align:right;">Executions</th>
-      <th style="padding:6px 8px;">Last Used</th>
-    </tr></thead><tbody>`;
+      <th style="padding:6px 8px;">Last Used</th>`;
+  if (withActions) html += `<th style="padding:6px 8px;"></th>`;
+  html += `</tr></thead><tbody>`;
 
   for (const pkg of packages) {
     const hasNodes = pkg.nodes && pkg.nodes.length > 0;
-    const lastSeen = pkg.last_seen
-      ? new Date(pkg.last_seen).toLocaleDateString()
-      : "—";
+    const lastSeen = pkg.last_seen ? new Date(pkg.last_seen).toLocaleDateString() : "—";
 
-    html += `<tr class="pkg-row" style="cursor:${hasNodes ? "pointer" : "default"};background:${bgColor};border-bottom:1px solid #222;"
-      onmouseover="this.style.background='${hoverColor}'" onmouseout="this.style.background='${bgColor}'">
+    html += `<tr class="pkg-row ns-row-${status}" style="cursor:${hasNodes ? "pointer" : "default"};border-bottom:1px solid #222;">
       <td style="padding:6px 8px;width:20px;"><span class="arrow" style="color:#666;">${hasNodes ? "▶" : " "}</span></td>
       <td style="padding:6px 8px;color:#fff;">${escapeHtml(pkg.package)}</td>
       <td style="padding:6px 8px;text-align:right;">${pkg.total_nodes}</td>
       <td style="padding:6px 8px;text-align:right;">${pkg.used_nodes}/${pkg.total_nodes}</td>
       <td style="padding:6px 8px;text-align:right;">${pkg.total_executions}</td>
-      <td style="padding:6px 8px;color:#888;">${lastSeen}</td>
-    </tr>`;
+      <td style="padding:6px 8px;color:#888;">${lastSeen}</td>`;
+
+    if (withActions) {
+      const eligible = isDisableEligible(pkg, managerInfo);
+      const cell = eligible
+        ? `<button class="ns-btn ns-disable-btn" data-pkg="${escapeAttr(pkg.package)}">Disable</button>`
+        : `<span style="color:#555;">—</span>`;
+      html += `<td class="ns-action-cell" data-pkg="${escapeAttr(pkg.package)}" style="padding:6px 8px;text-align:right;">${cell}</td>`;
+    }
+    html += `</tr>`;
 
     if (hasNodes) {
-      html += `<tr class="pkg-detail" style="display:none;"><td colspan="6" style="padding:0 0 0 32px;">
+      html += `<tr class="pkg-detail" style="display:none;"><td colspan="${colspan}" style="padding:0 0 0 32px;">
         <table style="width:100%;border-collapse:collapse;">`;
       for (const node of pkg.nodes) {
-        const nLastSeen = node.last_seen
-          ? new Date(node.last_seen).toLocaleDateString()
-          : "—";
+        const nLastSeen = node.last_seen ? new Date(node.last_seen).toLocaleDateString() : "—";
         html += `<tr style="border-bottom:1px solid #1a1a1a;color:#aaa;">
           <td style="padding:3px 8px;">${escapeHtml(node.class_type)}</td>
           <td style="padding:3px 8px;text-align:right;">${node.count}</td>
@@ -329,6 +375,221 @@ function buildTable(packages, status) {
   html += `</tbody></table>`;
   return html;
 }
+
+// ---------------------------------------------------------------------------
+// ComfyUI Manager integration: disable unused node packages
+// ---------------------------------------------------------------------------
+
+// Map of installed packages from ComfyUI Manager:
+//   { <dir name>: { ver, cnr_id, aux_id, enabled }, ... }
+// Returns null when the Manager is not installed/reachable, in which case the
+// disable UI is omitted entirely.
+async function fetchManagerInfo() {
+  try {
+    const resp = await fetch("/customnode/installed");
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data && typeof data === "object" ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+// Build the payload ComfyUI Manager's /manager/queue/disable expects. CNR
+// (registry) packages are keyed by their cnr_id; everything else is treated as
+// "unknown" and keyed by directory name.
+function disablePayload(dirName, info) {
+  if (info && info.cnr_id && info.ver && info.ver !== "unknown") {
+    return { id: info.cnr_id, version: info.ver, ui_id: dirName };
+  }
+  return { id: dirName, version: "unknown", files: [dirName], ui_id: dirName };
+}
+
+function wireDisableButtons(dialog, managerInfo) {
+  if (!managerInfo) return;
+
+  dialog.querySelectorAll(".ns-disable-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      handleDisable([btn.dataset.pkg], dialog, managerInfo);
+    });
+  });
+
+  dialog.querySelectorAll(".ns-disable-all-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      let names = [];
+      try { names = JSON.parse(btn.dataset.pkgs); } catch { names = []; }
+      handleDisable(names, dialog, managerInfo);
+    });
+  });
+}
+
+async function handleDisable(pkgNames, dialog, managerInfo) {
+  // Only act on packages Manager still reports as enabled (guards against
+  // double-clicks and stale buttons after a partial batch).
+  pkgNames = pkgNames.filter((n) => managerInfo[n] && managerInfo[n].enabled);
+  if (pkgNames.length === 0) return;
+
+  const what = pkgNames.length === 1 ? `"${pkgNames[0]}"` : `${pkgNames.length} packages`;
+  const confirmMsg =
+    `Disable ${what} via ComfyUI Manager?\n\n` +
+    `They will be moved to custom_nodes/.disabled and a ComfyUI restart is ` +
+    `required to take effect. You can re-enable them anytime from ComfyUI Manager.`;
+  if (!confirm(confirmMsg)) return;
+
+  setDisableButtonsBusy(dialog, true);
+  try {
+    const pre = await fetch("/manager/queue/status").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    if (pre && pre.is_processing) {
+      notify("ComfyUI Manager is busy. Please try again in a moment.", "warn");
+      setDisableButtonsBusy(dialog, false);
+      return;
+    }
+
+    const payloads = pkgNames.map((n) => disablePayload(n, managerInfo[n]));
+    await runManagerDisable(payloads);
+
+    // Reconcile against Manager's actual state: a package is considered
+    // disabled only if it's no longer reported as enabled on disk.
+    const after = await fetchManagerInfo();
+    const isStillEnabled = (n) => after && after[n] && after[n].enabled;
+    const succeeded = after ? pkgNames.filter((n) => !isStillEnabled(n)) : pkgNames;
+    const failed = pkgNames.filter((n) => !succeeded.includes(n));
+
+    succeeded.forEach((n) => { if (managerInfo[n]) managerInfo[n].enabled = false; });
+    markPackagesDisabled(dialog, succeeded);
+    updateBulkButtons(dialog, managerInfo);
+
+    if (succeeded.length > 0) {
+      showRestartBanner(dialog);
+      notify(`Disabled ${succeeded.length} package${succeeded.length !== 1 ? "s" : ""}. Restart ComfyUI to apply.`, "success");
+    }
+    if (failed.length > 0) {
+      notify(`ComfyUI Manager could not disable: ${failed.join(", ")}`, "error");
+    }
+  } catch (e) {
+    notify("Failed to disable: " + e.message, "error");
+  } finally {
+    setDisableButtonsBusy(dialog, false);
+  }
+}
+
+// Queue the disable tasks and run them, then wait for the Manager worker to
+// finish. /manager/queue/start returns 201 if a worker is already running.
+async function runManagerDisable(payloads) {
+  await fetch("/manager/queue/reset", { method: "POST", headers: { "Content-Type": "application/json" } });
+
+  for (const payload of payloads) {
+    const r = await fetch("/manager/queue/disable", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) throw new Error(`disable request failed (HTTP ${r.status})`);
+  }
+
+  const start = await fetch("/manager/queue/start", { method: "POST", headers: { "Content-Type": "application/json" } });
+  if (!start.ok && start.status !== 201) throw new Error(`queue start failed (HTTP ${start.status})`);
+
+  await waitForQueue();
+}
+
+async function waitForQueue(timeoutMs = 60000) {
+  const deadline = Date.now() + timeoutMs;
+  await sleep(300);
+  while (Date.now() < deadline) {
+    let st = null;
+    try {
+      const r = await fetch("/manager/queue/status");
+      if (r.ok) st = await r.json();
+    } catch { /* transient; retry */ }
+    if (st && !st.is_processing && st.in_progress_count === 0) return;
+    await sleep(500);
+  }
+  throw new Error("timed out waiting for ComfyUI Manager");
+}
+
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+function setDisableButtonsBusy(dialog, busy) {
+  dialog.querySelectorAll(".ns-disable-btn, .ns-disable-all-btn").forEach((b) => {
+    b.disabled = busy;
+  });
+}
+
+function markPackagesDisabled(dialog, pkgNames) {
+  for (const name of pkgNames) {
+    const cell = dialog.querySelector(`.ns-action-cell[data-pkg="${cssEscape(name)}"]`);
+    if (cell) {
+      cell.innerHTML = `<span style="color:#6a6;font-size:11px;">✓ disabled · restart</span>`;
+      cell.closest("tr")?.classList.add("ns-disabled-row");
+    }
+  }
+}
+
+// Recompute "Disable all (N)" counts after a batch; hide buttons with nothing
+// left to disable.
+function updateBulkButtons(dialog, managerInfo) {
+  dialog.querySelectorAll(".ns-disable-all-btn").forEach((btn) => {
+    let names = [];
+    try { names = JSON.parse(btn.dataset.pkgs); } catch { names = []; }
+    const remaining = names.filter((n) => managerInfo[n] && managerInfo[n].enabled);
+    if (remaining.length === 0) {
+      btn.style.display = "none";
+    } else {
+      btn.dataset.pkgs = JSON.stringify(remaining);
+      btn.textContent = `Disable all (${remaining.length})`;
+    }
+  });
+}
+
+function showRestartBanner(dialog) {
+  if (dialog.querySelector("#ns-restart-banner")) return;
+
+  const banner = document.createElement("div");
+  banner.id = "ns-restart-banner";
+  banner.style.cssText =
+    "display:flex;align-items:center;justify-content:space-between;gap:12px;background:#2a2215;border:1px solid #a83;border-radius:4px;padding:10px 14px;margin-bottom:16px;";
+  banner.innerHTML =
+    `<span style="color:#eca;">Changes applied on disk. Restart ComfyUI to unload disabled packages.</span>
+     <span style="white-space:nowrap;">
+       <button id="ns-restart-btn" class="ns-btn" style="border-color:#a83;color:#fc8;">Restart ComfyUI</button>
+       <button id="ns-restart-dismiss" class="ns-btn" style="margin-left:6px;">Later</button>
+     </span>`;
+
+  const tabs = dialog.querySelector("#ns-tabs");
+  tabs ? tabs.before(banner) : dialog.prepend(banner);
+
+  banner.querySelector("#ns-restart-btn").addEventListener("click", rebootComfy);
+  banner.querySelector("#ns-restart-dismiss").addEventListener("click", () => banner.remove());
+}
+
+async function rebootComfy() {
+  if (!confirm("Restart ComfyUI now? The server will go down briefly and the page will reconnect.")) return;
+  notify("Restarting ComfyUI…", "info");
+  try {
+    await fetch("/manager/reboot", { method: "POST", headers: { "Content-Type": "application/json" } });
+  } catch {
+    // The reboot tears down the connection, so a network error here is expected.
+  }
+}
+
+function notify(detail, severity) {
+  try {
+    const toast = app?.extensionManager?.toast;
+    if (toast && typeof toast.add === "function") {
+      toast.add({ severity: severity === "warn" ? "warn" : severity, summary: "Node Stats", detail, life: 5000 });
+      return;
+    }
+  } catch { /* fall through to console/alert */ }
+  if (severity === "error") alert(detail);
+  else console.log("[Node Stats] " + detail);
+}
+
+// ---------------------------------------------------------------------------
+// Easter egg
+// ---------------------------------------------------------------------------
 
 // Internal: builds celebratory overlay for top contributors
 function showPodium(top3, overlay) {
@@ -454,4 +715,14 @@ function escapeHtml(str) {
   const div = document.createElement("div");
   div.textContent = str;
   return div.innerHTML;
+}
+
+// Escape a value for use inside a double-quoted HTML attribute.
+function escapeAttr(str) {
+  return escapeHtml(str).replace(/"/g, "&quot;");
+}
+
+// Escape a string for use in a CSS attribute selector.
+function cssEscape(str) {
+  return window.CSS && CSS.escape ? CSS.escape(str) : String(str).replace(/["\\]/g, "\\$&");
 }
