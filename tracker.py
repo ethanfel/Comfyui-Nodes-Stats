@@ -432,6 +432,24 @@ class UsageTracker:
             result.append(d)
         return result
 
+    def tick_boot_days(self):
+        """Once per distinct calendar day, age every active trial by one boot-day."""
+        today = datetime.now(timezone.utc).date().isoformat()
+        with self._lock:
+            self._ensure_db()
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """UPDATE trial_packages
+                       SET unused_boot_days = unused_boot_days + 1,
+                           last_boot_day = ?
+                       WHERE last_boot_day != ?""",
+                    (today, today),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
     def reset(self):
         """Clear all tracked data."""
         with self._lock:
