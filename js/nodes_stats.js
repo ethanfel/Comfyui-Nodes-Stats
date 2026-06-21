@@ -44,8 +44,35 @@ app.registerExtension({
         menu.append(btn);
       }
     }
+
+    // Detect missing/disabled nodes whenever a workflow is loaded.
+    const origLoad = app.loadGraphData?.bind(app);
+    if (origLoad) {
+      app.loadGraphData = function (...args) {
+        const r = origLoad(...args);
+        setTimeout(() => onWorkflowLoaded(), 0); // after graph settles
+        return r;
+      };
+    }
   },
 });
+
+// Return the set of node types present in the current graph that LiteGraph
+// doesn't have registered — i.e. nodes from missing or disabled packages.
+function unresolvedNodeTypes() {
+  const types = new Set();
+  const nodes = app.graph?._nodes || [];
+  for (const n of nodes) {
+    const t = n.type;
+    if (t && !LiteGraph.registered_node_types[t]) types.add(t);
+  }
+  return [...types];
+}
+
+async function onWorkflowLoaded() {
+  const unresolved = unresolvedNodeTypes();
+  if (unresolved.length) console.log("[Node Stats] unresolved:", unresolved);
+}
 
 async function showStatsDialog() {
   let data, modelData, managerInfo;
