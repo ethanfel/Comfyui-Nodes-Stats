@@ -684,6 +684,20 @@ function enablePayload(dirName, info) {
   };
 }
 
+// Whether ComfyUI Manager is mid-operation. Used to avoid resetting its queue
+// out from under an in-progress install/disable (the manual disable flow guards
+// the same way before calling runManagerDisable).
+async function managerIsBusy() {
+  try {
+    const r = await fetch("/manager/queue/status");
+    if (!r.ok) return false;
+    const st = await r.json();
+    return !!(st && st.is_processing);
+  } catch {
+    return false;
+  }
+}
+
 async function runManagerEnable(payload) {
   await fetch("/manager/queue/reset", { method: "POST", headers: { "Content-Type": "application/json" } });
 
@@ -706,6 +720,11 @@ async function handleEnable(pkg, temporary, dialog) {
   const entry = _lastWorkflowScan.disabled.find((d) => d.pkg === pkg);
   const info = entry && entry.info;
   if (!info) return;
+
+  if (await managerIsBusy()) {
+    notify("ComfyUI Manager is busy. Please try again in a moment.", "warn");
+    return;
+  }
 
   setWorkflowButtonsBusy(dialog, true);
   try {
@@ -783,6 +802,10 @@ async function processExpiredTrials() {
 
   const mgr = await fetchManagerInfo();
   if (!mgr) return; // Manager unavailable — leave rows for a later session
+
+  // Don't reset Manager's queue out from under an in-progress operation
+  // (e.g. startup install work); the expired rows persist and retry next session.
+  if (await managerIsBusy()) return;
 
   const done = [];
   for (const t of expired) {
