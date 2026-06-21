@@ -714,30 +714,39 @@ async function runManagerEnable(payload) {
   await waitForQueue();
 }
 
+// Shared enable core used by the Workflow tab and the mirror search palette.
+// Performs the Manager enable + trial bookkeeping + success toast.
+// Returns true on success, false if Manager was busy. Throws on failure.
+// Caller owns its own busy UI and restart affordance.
+async function enablePackage(pkg, info, temporary) {
+  if (!info) throw new Error("no enable info for " + pkg);
+  if (await managerIsBusy()) {
+    notify("ComfyUI Manager is busy. Please try again in a moment.", "warn");
+    return false;
+  }
+  await runManagerEnable(enablePayload(pkg, info));
+  const route = temporary ? "/nodes-stats/trials/start" : "/nodes-stats/trials/stop";
+  await fetch(route, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ package: pkg }),
+  });
+  notify(`Enabled ${pkg}${temporary ? " for a 7-day trial" : ""}. Restart ComfyUI to apply.`, "success");
+  return true;
+}
+
 // Enable a disabled package, optionally under a temporary trial. A permanent
 // enable clears any existing trial row so the package is never auto-disabled.
 async function handleEnable(pkg, temporary, dialog) {
   const entry = _lastWorkflowScan.disabled.find((d) => d.pkg === pkg);
   const info = entry && entry.info;
   if (!info) return;
-
-  if (await managerIsBusy()) {
-    notify("ComfyUI Manager is busy. Please try again in a moment.", "warn");
-    return;
-  }
-
   setWorkflowButtonsBusy(dialog, true);
   try {
-    await runManagerEnable(enablePayload(pkg, info));
-    const route = temporary ? "/nodes-stats/trials/start" : "/nodes-stats/trials/stop";
-    await fetch(route, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ package: pkg }),
-    });
-    if (entry.info) entry.info.state = "enabled";
-    showRestartBanner(dialog);
-    notify(`Enabled ${pkg}${temporary ? " for a 7-day trial" : ""}. Restart ComfyUI to apply.`, "success");
+    if (await enablePackage(pkg, info, temporary)) {
+      entry.info.state = "enabled";
+      showRestartBanner(dialog);
+    }
   } catch (e) {
     notify("Failed to enable: " + e.message, "error");
   } finally {
