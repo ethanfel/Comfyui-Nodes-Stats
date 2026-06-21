@@ -469,6 +469,17 @@ class UsageTracker:
             finally:
                 conn.close()
 
+    def stop_trial(self, package):
+        """End a trial (package became permanent or was disabled)."""
+        with self._lock:
+            self._ensure_db()
+            conn = self._connect()
+            try:
+                conn.execute("DELETE FROM trial_packages WHERE package = ?", (package,))
+                conn.commit()
+            finally:
+                conn.close()
+
     def reset(self):
         """Clear all tracked data."""
         with self._lock:
@@ -478,6 +489,7 @@ class UsageTracker:
                 conn.execute("DELETE FROM node_usage")
                 conn.execute("DELETE FROM prompt_log")
                 conn.execute("DELETE FROM model_usage")
+                conn.execute("DELETE FROM trial_packages")
                 conn.commit()
             finally:
                 conn.close()

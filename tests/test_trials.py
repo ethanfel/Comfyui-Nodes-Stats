@@ -69,3 +69,15 @@ def test_reset_empty_is_noop(tracker):
     tracker.start_trial("Pack")
     tracker.reset_trials_for(set())
     assert tracker.get_trials()[0]["unused_boot_days"] == 0
+
+
+def test_stop_trial_removes_row(tracker):
+    tracker.start_trial("Pack")
+    tracker.stop_trial("Pack")
+    assert tracker.get_trials() == []
+
+
+def test_reset_clears_trials(tracker):
+    tracker.start_trial("Pack")
+    tracker.reset()
+    assert tracker.get_trials() == []
