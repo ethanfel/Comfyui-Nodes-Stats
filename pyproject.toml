@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-nodes-stats"
 description = "Track usage statistics for all ComfyUI nodes and packages"
-version = "1.3.0"
+version = "1.4.0"
 license = "MIT"
 
 [project.urls]
