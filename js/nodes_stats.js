@@ -656,6 +656,78 @@ async function runManagerDisable(payloads) {
   await waitForQueue();
 }
 
+// Re-enable a disabled pack via ComfyUI Manager (confirmed against the live
+// server and ComfyUI-Manager's manager_server.py / manager_core.py). Two routes
+// through /manager/queue/install, both ending in unified_enable (a dir move out
+// of .disabled — never a re-clone):
+//   • version != "unknown" (nightly/semver): skip_post_install takes the fast
+//     path, unified_enable(id) is called and the route returns before reading
+//     channel/mode/files. Load-bearing: id, version, skip_post_install.
+//   • version == "unknown": queues an install task; install_by_id sees the pack
+//     is_disabled and calls unified_enable. Needs files (repo URL), channel, mode.
+// selected_version always mirrors version, so the "invalid request" arm (version
+// set but selected_version=="unknown") is never hit. One payload covers both.
+function enablePayload(dirName, info) {
+  return {
+    id: info.id || dirName,
+    version: info.version,
+    files: info.files,
+    channel: "default",
+    mode: "cache",
+    skip_post_install: true,
+    selected_version: info.version,
+    ui_id: dirName,
+  };
+}
+
+async function runManagerEnable(payload) {
+  await fetch("/manager/queue/reset", { method: "POST", headers: { "Content-Type": "application/json" } });
+
+  const r = await fetch("/manager/queue/install", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(`enable request failed (HTTP ${r.status})`);
+
+  const start = await fetch("/manager/queue/start", { method: "POST", headers: { "Content-Type": "application/json" } });
+  if (!start.ok && start.status !== 201) throw new Error(`queue start failed (HTTP ${start.status})`);
+
+  await waitForQueue();
+}
+
+// Enable a disabled package, optionally under a temporary trial. A permanent
+// enable clears any existing trial row so the package is never auto-disabled.
+async function handleEnable(pkg, temporary, dialog) {
+  const entry = _lastWorkflowScan.disabled.find((d) => d.pkg === pkg);
+  const info = entry && entry.info;
+  if (!info) return;
+
+  setWorkflowButtonsBusy(dialog, true);
+  try {
+    await runManagerEnable(enablePayload(pkg, info));
+    const route = temporary ? "/nodes-stats/trials/start" : "/nodes-stats/trials/stop";
+    await fetch(route, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ package: pkg }),
+    });
+    if (entry.info) entry.info.state = "enabled";
+    showRestartBanner(dialog);
+    notify(`Enabled ${pkg}${temporary ? " for a 7-day trial" : ""}. Restart ComfyUI to apply.`, "success");
+  } catch (e) {
+    notify("Failed to enable: " + e.message, "error");
+  } finally {
+    setWorkflowButtonsBusy(dialog, false);
+  }
+}
+
+function setWorkflowButtonsBusy(dialog, busy) {
+  dialog.querySelectorAll(".ns-enable-temp-btn, .ns-enable-perm-btn, .ns-install-btn").forEach((b) => {
+    b.disabled = busy;
+  });
+}
+
 async function waitForQueue(timeoutMs = 60000) {
   const deadline = Date.now() + timeoutMs;
   await sleep(300);
