@@ -16,6 +16,7 @@ A ComfyUI custom node package that silently tracks which nodes, packages, and mo
 - **Uninstall detection** — removed packages/models are flagged separately, historical data preserved
 - **Expandable detail** — click any package to see individual node-level stats
 - **One-click disable** — disable unused packages straight from the dialog via ComfyUI Manager (per-package or in bulk), reversible at any time
+- **Workflow tab** — on loading a workflow, splits unresolved nodes into *Missing* (install via Manager) and *Disabled*, with a temporary **Enable 7d** trial that auto-disables packages left unused
 - **Non-blocking** — DB writes happen in a background thread, no impact on workflow execution
 
 ## Package Classification
@@ -58,7 +59,7 @@ Restart ComfyUI. Tracking starts immediately and silently.
 
 ### UI
 
-Click the **Node Stats** button (bar chart icon) in the ComfyUI top menu bar. A dialog opens with two tabs:
+Click the **Node Stats** button (bar chart icon) in the ComfyUI top menu bar. A dialog opens with three tabs:
 
 **Nodes tab**
 - Summary bar with counts for each classification tier
@@ -79,6 +80,33 @@ package, plus a **Disable all** button per section. Disabling:
 
 If ComfyUI Manager is not installed, the disable buttons are hidden and stats work as before.
 
+### Workflow tab & temporary enable
+
+Whenever you load a workflow, the extension scans for node types the running
+ComfyUI can't resolve and, if any are found, opens the dialog on the **Workflow**
+tab. Unresolved nodes are split into two groups:
+
+- **Missing** — the owning package isn't installed. Install is handled by
+  [ComfyUI Manager](https://github.com/ltdrdata/ComfyUI-Manager) like always: the
+  **Install** button opens Manager's Custom Nodes Manager (use its *Missing*
+  filter).
+- **Disabled** — the package is installed but currently disabled. Each row offers:
+  - **Enable 7d** — re-enable the package and start a *temporary trial*.
+  - **Enable** — re-enable permanently (no trial).
+
+**The temporary trial** is a rolling budget of **7 distinct boot-days**. A
+"boot-day" is counted at most once per calendar day, the first time ComfyUI
+starts that day — so the clock measures days you actually run ComfyUI, not wall
+time. **Any execution that uses the package resets the counter to zero.** If a
+trial package goes its full budget of distinct boot-days without being used, it
+is **auto-disabled on the next UI load** (handed to ComfyUI Manager exactly like
+a manual disable) and the trial is cleared. As with any disable, a ComfyUI
+restart is required to fully unload it.
+
+Re-enabling and auto-disabling both go through ComfyUI Manager, so the whole
+Workflow tab is inert when Manager is not installed (the backend still tracks
+trial state, but no enable/disable actions are offered).
+
 **Models tab**
 - Summary bar with counts for each tier across all model types
 - Sections per model type (checkpoints, vae, controlnet, …)
@@ -92,6 +120,9 @@ If ComfyUI Manager is not installed, the disable buttons are hidden and stats wo
 | `/nodes-stats/usage` | GET | Raw per-node usage data |
 | `/nodes-stats/models` | GET | Per-type model stats with classification |
 | `/nodes-stats/reset` | POST | Clear all tracked data |
+| `/nodes-stats/trials` | GET | Active temporary-enable trials with `days_remaining`/`expired` |
+| `/nodes-stats/trials/start` | POST | Begin/restart a trial — body `{"package": "<dir-name>"}` |
+| `/nodes-stats/trials/stop` | POST | End a trial (made permanent or disabled) — body `{"package": "<dir-name>"}` |
 
 ```bash
 curl http://localhost:8188/nodes-stats/packages | python3 -m json.tool
@@ -178,6 +209,7 @@ All data is stored in `<ComfyUI user dir>/nodes_stats/usage_stats.db` (survives 
 | `node_usage` | Per-node: class_type, package, execution count, first/last seen |
 | `prompt_log` | Per-prompt: timestamp, JSON array of all class_types used |
 | `model_usage` | Per-model: filename, type, execution count, first/last seen |
+| `trial_packages` | Per temporary-enable trial: package, enable date, unused-boot-day counter, budget |
 
 Use `POST /nodes-stats/reset` to clear all data and start fresh.
 
@@ -208,7 +240,7 @@ timeout so the kernel keeps the listing warm across restarts, e.g.
 __init__.py                     Entry point: prompt handler, API routes
 mapper.py                       class_type → package mapping; model filename → type mapping
 tracker.py                      SQLite persistence and stats aggregation
-js/nodes_stats.js               Frontend: menu button + stats dialog (Nodes/Models tabs)
+js/nodes_stats.js               Frontend: menu button + stats dialog (Nodes/Models/Workflow tabs)
 tools/diagnose_model_scan.py    Standalone: diagnose slow model-folder scans at boot
 pyproject.toml                  Package metadata
 tests/                          Unit tests for tracker and mapper
