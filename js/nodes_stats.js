@@ -45,6 +45,15 @@ app.registerExtension({
       }
     }
 
+    const searchBtn = document.createElement("button");
+    searchBtn.textContent = "⌕";
+    searchBtn.title = "Search disabled-pack nodes (Ctrl/Cmd+Shift+D)";
+    searchBtn.className = "comfyui-button comfyui-menu-mobile-collapse";
+    searchBtn.style.cssText = "display:flex;align-items:center;justify-content:center;padding:6px;cursor:pointer;font-size:16px;";
+    searchBtn.onclick = () => openMirrorSearch();
+    if (app.menu?.settingsGroup?.element) app.menu.settingsGroup.element.before(searchBtn);
+    else document.querySelector(".comfy-menu")?.append(searchBtn);
+
     // Detect missing/disabled nodes whenever a workflow is loaded.
     const origLoad = app.loadGraphData?.bind(app);
     if (origLoad) {
@@ -58,6 +67,14 @@ app.registerExtension({
     // Once the app has settled, auto-disable trial packages that went unused for
     // their full budget of distinct boot-days. Inert when ComfyUI Manager is absent.
     setTimeout(() => { processExpiredTrials().catch(() => {}); }, 3000);
+
+    window.addEventListener("keydown", (e) => {
+      if (!(e.shiftKey && (e.ctrlKey || e.metaKey) && (e.key === "D" || e.key === "d"))) return;
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      e.preventDefault();
+      openMirrorSearch();
+    });
   },
 });
 
