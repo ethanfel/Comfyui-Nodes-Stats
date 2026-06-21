@@ -894,6 +894,19 @@ async function openMirrorSearch() {
       #nodes-stats-mirror .ns-mrow:hover{background:#262626;}
       #nodes-stats-mirror .ns-mrow.active{background:#1f2c1f;}
       #nodes-stats-mirror a{color:#6a9bd8;}
+      #nodes-stats-mirror .ns-mname{cursor:pointer;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+      #nodes-stats-mirror .ns-mname:hover{color:#9fd0ff;text-decoration:underline;}
+      #nodes-stats-mirror .ns-node{border:1px solid #555;border-radius:6px;background:#2b2b2b;overflow:hidden;}
+      #nodes-stats-mirror .ns-node-title{background:#3a3a3a;color:#fff;font-size:12px;padding:5px 8px;border-bottom:1px solid #555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+      #nodes-stats-mirror .ns-node-body{padding:6px 4px;}
+      #nodes-stats-mirror .ns-iorow{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#d2d2d2;line-height:1.7;gap:8px;}
+      #nodes-stats-mirror .ns-io-in,#nodes-stats-mirror .ns-io-out{display:flex;align-items:center;gap:5px;min-width:0;}
+      #nodes-stats-mirror .ns-io-in span,#nodes-stats-mirror .ns-io-out span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      #nodes-stats-mirror .ns-io-out{justify-content:flex-end;text-align:right;}
+      #nodes-stats-mirror .ns-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0;border:1px solid rgba(0,0,0,0.4);}
+      #nodes-stats-mirror .ns-node-widgets{margin-top:5px;border-top:1px solid #3a3a3a;padding-top:5px;}
+      #nodes-stats-mirror .ns-node-widget{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:#bbb;padding:2px 4px;align-items:center;}
+      #nodes-stats-mirror .ns-wval{background:#1b1b1b;border:1px solid #444;border-radius:3px;padding:0 6px;color:#ddd;max-width:62%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
     </style>
     <div style="padding:12px;border-bottom:1px solid #333;display:flex;gap:8px;align-items:center;">
       <input id="ns-mirror-input" placeholder="search disabled-pack nodes…" autocomplete="off"
@@ -920,9 +933,9 @@ async function openMirrorSearch() {
     preview.innerHTML = `<div style="color:#666;">${escapeHtml(msg || "Hover a result to preview its package.")}</div>`;
   }
 
-  // Preview panel for the active row. We can't render a real node graphic (the
-  // pack is disabled, so its definition isn't loaded), so we show the pack
-  // metadata we do have: title/author/description + the sibling nodes in the pack.
+  // Preview panel for the active row: an imitation node box (built from the
+  // backend's static parse of the disabled pack's source — drawn on click) plus
+  // the pack metadata (title/author/description + sibling nodes in the pack).
   function renderPreview(entry) {
     if (!entry) { clearPreview(); return; }
     const m = entry.meta || {};
@@ -936,8 +949,13 @@ async function openMirrorSearch() {
     const meta = [`<span style="color:#777;">pack</span><span style="color:#ccc;word-break:break-all;">${escapeHtml(entry.pack)}</span>`];
     if (m.author) meta.push(`<span style="color:#777;">author</span><span style="color:#ccc;">${escapeHtml(m.author)}</span>`);
     if (m.version) meta.push(`<span style="color:#777;">version</span><span style="color:#ccc;">${escapeHtml(String(m.version))}</span>`);
+    const cached = _nodeSchemaCache[schemaKey(entry)];
+    const nodeSection = cached !== undefined
+      ? nodeBoxHtml(entry, cached)
+      : `<button class="ns-btn ns-draw-node" style="width:100%;">▭ Draw this node</button>`;
     preview.innerHTML = `
       <div style="color:#fff;font-size:14px;word-break:break-word;margin-bottom:10px;">${escapeHtml(entry.class_type)}</div>
+      <div id="ns-nodebox" style="margin-bottom:12px;">${nodeSection}</div>
       <div style="display:grid;grid-template-columns:auto 1fr;gap:3px 8px;font-size:11px;margin-bottom:10px;">${meta.join("")}</div>
       ${m.description ? `<div style="color:#aaa;font-size:11px;font-style:italic;border-left:2px solid #444;padding-left:8px;margin-bottom:10px;">${escapeHtml(m.description)}</div>` : ""}
       ${m.repo ? `<div style="margin-bottom:12px;"><a href="${escapeAttr(m.repo)}" target="_blank" rel="noopener" style="font-size:11px;word-break:break-all;">${escapeHtml(m.repo)}</a></div>` : ""}
@@ -947,10 +965,32 @@ async function openMirrorSearch() {
       </div>
       <div style="color:#777;font-size:11px;margin-bottom:4px;">${sibs.length} node${sibs.length !== 1 ? "s" : ""} in this pack</div>
       <div style="font-size:11px;">${sibHtml}</div>`;
+    preview.querySelector(".ns-draw-node")?.addEventListener("click", () => loadNode(entry));
     preview.querySelectorAll(".ns-mirror-temp").forEach((b) =>
       b.addEventListener("click", () => mirrorEnable(b.dataset.pkg, true, overlay)));
     preview.querySelectorAll(".ns-mirror-perm").forEach((b) =>
       b.addEventListener("click", () => mirrorEnable(b.dataset.pkg, false, overlay)));
+  }
+
+  // Fetch and cache a node's parsed schema, then redraw if it's still active.
+  // Definitive answers (parsed / dynamic / not-found) are cached; only transient
+  // network/HTTP errors are allowed to refetch on a later click.
+  async function loadNode(entry) {
+    const key = schemaKey(entry);
+    const cur = _nodeSchemaCache[key];
+    const transient = cur && cur.parseable === false &&
+      (cur.reason === "network" || String(cur.reason).startsWith("http"));
+    if (cur === undefined || transient) {
+      _nodeSchemaCache[key] = "loading";
+      if (currentRows[activeIndex] === entry) renderPreview(entry);
+      try {
+        const r = await fetch(`/nodes-stats/node-schema?class_type=${encodeURIComponent(entry.class_type)}&pack=${encodeURIComponent(entry.pack)}`);
+        _nodeSchemaCache[key] = r.ok ? await r.json() : { parseable: false, reason: "http_" + r.status };
+      } catch {
+        _nodeSchemaCache[key] = { parseable: false, reason: "network" };
+      }
+    }
+    if (currentRows[activeIndex] === entry) renderPreview(entry);
   }
 
   function setActive(i) {
@@ -988,7 +1028,7 @@ async function openMirrorSearch() {
     for (const e of rows) {
       html += `<div class="ns-mrow" style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid #222;">
         <div style="flex:1;min-width:0;">
-          <div style="color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(e.class_type)}</div>
+          <div class="ns-mname" title="Draw this node">${escapeHtml(e.class_type)}</div>
           <div style="color:#888;font-size:11px;">${escapeHtml(e.pack)}</div>
         </div>
         <button class="ns-btn ns-mirror-temp" data-pkg="${escapeAttr(e.pack)}">Enable 7d</button>
@@ -1001,8 +1041,10 @@ async function openMirrorSearch() {
       b.addEventListener("click", () => mirrorEnable(b.dataset.pkg, true, overlay)));
     results.querySelectorAll(".ns-mirror-perm").forEach((b) =>
       b.addEventListener("click", () => mirrorEnable(b.dataset.pkg, false, overlay)));
-    results.querySelectorAll(".ns-mrow").forEach((el, i) =>
-      el.addEventListener("mouseenter", () => setActive(i)));
+    results.querySelectorAll(".ns-mrow").forEach((el, i) => {
+      el.addEventListener("mouseenter", () => setActive(i));
+      el.querySelector(".ns-mname")?.addEventListener("click", () => { setActive(i); loadNode(currentRows[i]); });
+    });
     setActive(0);
   }
 
@@ -1038,6 +1080,68 @@ async function mirrorEnable(pkg, temporary, overlay) {
   } finally {
     overlay.querySelectorAll(".ns-btn").forEach((b) => (b.disabled = false));
   }
+}
+
+// Lazily-fetched node schemas, keyed by `${pack}\n${class_type}`. A value of
+// "loading" means a request is in flight; otherwise it's the parsed schema (or
+// a {parseable:false} marker). Persists across palette opens for the session.
+const _nodeSchemaCache = {};
+function schemaKey(entry) { return entry.pack + "\n" + entry.class_type; }
+
+// ComfyUI-ish accent colors per socket type, for the imitation node box.
+function typeColor(t) {
+  const C = {
+    IMAGE: "#64b5f6", LATENT: "#ff79c6", MODEL: "#a78bfa", CLIP: "#fbbf24",
+    VAE: "#f87171", CONDITIONING: "#fb923c", MASK: "#4dd0e1", CONTROL_NET: "#80cbc4",
+    INT: "#9ccc65", FLOAT: "#9ccc65", STRING: "#cfd8dc", BOOLEAN: "#cfd8dc", COMBO: "#cfd8dc",
+  };
+  return C[String(t || "").toUpperCase()] || "#9aa";
+}
+
+// Build the imitation node box from a parsed schema. Sockets (custom types) go
+// on the sides; primitives/combos render as in-node widgets with their default.
+function nodeBoxHtml(entry, s) {
+  if (!s || s === "loading") {
+    return `<div style="color:#888;font-size:11px;padding:4px 2px;">drawing node…</div>`;
+  }
+  if (!s.parseable) {
+    const why = s.reason === "source_not_found" ? "pack source not found on disk"
+      : s.reason === "dynamic_mapping" ? "pack builds its node list dynamically"
+      : "schema unavailable";
+    return `<div class="ns-node"><div class="ns-node-title">${escapeHtml(entry.class_type)}</div>
+      <div style="padding:8px;color:#888;font-size:11px;">Can't read slots — ${escapeHtml(why)}.<br>Enable + restart to see the real node.</div></div>`;
+  }
+  const sockets = (s.inputs || []).filter((i) => !i.widget);
+  const widgets = (s.inputs || []).filter((i) => i.widget);
+  const outs = s.outputs || [];
+  const maxRows = Math.max(sockets.length, outs.length);
+  let io = "";
+  for (let r = 0; r < maxRows; r++) {
+    const ip = sockets[r], op = outs[r];
+    io += `<div class="ns-iorow">
+      <span class="ns-io-in">${ip ? `<span class="ns-dot" style="background:${typeColor(ip.type)};"></span><span title="${escapeAttr(ip.type)}">${escapeHtml(ip.name)}</span>` : ""}</span>
+      <span class="ns-io-out">${op ? `<span title="${escapeAttr(op.type)}">${escapeHtml(op.name)}</span><span class="ns-dot" style="background:${typeColor(op.type)};"></span>` : ""}</span>
+    </div>`;
+  }
+  let wid = "";
+  for (const w of widgets) {
+    let val = w.default !== null && w.default !== undefined ? w.default
+      : (w.options && w.options.length ? w.options[0] : "");
+    if (typeof val === "boolean") val = val ? "true" : "false";
+    const combo = w.type === "COMBO";
+    wid += `<div class="ns-node-widget"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(w.name)}</span>
+      <span class="ns-wval">${escapeHtml(String(val))}${combo ? " ▾" : ""}</span></div>`;
+  }
+  const counts = `${sockets.length} in · ${widgets.length} widget${widgets.length !== 1 ? "s" : ""} · ${outs.length} out${s.category ? ` · ${escapeHtml(s.category)}` : ""}`;
+  return `<div class="ns-node">
+    <div class="ns-node-title">${escapeHtml(s.display_name || entry.class_type)}</div>
+    <div class="ns-node-body">
+      ${io}
+      ${wid ? `<div class="ns-node-widgets">${wid}</div>` : ""}
+      ${(!io && !wid) ? `<div style="padding:6px;color:#777;font-size:11px;">no inputs or outputs</div>` : ""}
+    </div>
+  </div>
+  <div style="color:#666;font-size:10px;margin-top:4px;">${counts}</div>`;
 }
 
 // Missing packages are deferred to ComfyUI Manager — the design treats "Missing"

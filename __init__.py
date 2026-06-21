@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import threading
 
@@ -5,6 +6,7 @@ from aiohttp import web
 from server import PromptServer
 
 from .mapper import NodePackageMapper, ModelMapper
+from .node_introspect import find_disabled_pack_path, get_node_schema
 from .tracker import UsageTracker
 
 logger = logging.getLogger(__name__)
@@ -112,6 +114,33 @@ async def reset_stats(request):
         return web.json_response({"status": "ok"})
     except Exception:
         logger.error("nodes-stats: error resetting stats", exc_info=True)
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+@routes.get("/nodes-stats/node-schema")
+async def get_node_schema_route(request):
+    """Parse a disabled pack's source and return one node's input/output schema.
+
+    Read-only and never imports/executes the pack. Used by the mirror-search
+    palette to draw a faithful node box for a node that isn't loaded.
+    """
+    try:
+        class_type = request.query.get("class_type")
+        pack = request.query.get("pack")
+        if not class_type or not pack:
+            return web.json_response({"error": "class_type and pack required"}, status=400)
+
+        def _resolve():
+            path = find_disabled_pack_path(pack)
+            if not path:
+                return {"parseable": False, "reason": "source_not_found"}
+            return get_node_schema(class_type, path)
+
+        # AST-parsing a whole pack can take tens of ms; keep it off the event loop.
+        schema = await asyncio.get_event_loop().run_in_executor(None, _resolve)
+        return web.json_response(schema)
+    except Exception:
+        logger.error("nodes-stats: error parsing node schema", exc_info=True)
         return web.json_response({"error": "internal error"}, status=500)
 
 

@@ -17,7 +17,7 @@ A ComfyUI custom node package that silently tracks which nodes, packages, and mo
 - **Expandable detail** — click any package to see individual node-level stats
 - **One-click disable** — disable unused packages straight from the dialog via ComfyUI Manager (per-package or in bulk), reversible at any time
 - **Workflow tab** — on loading a workflow, splits unresolved nodes into *Missing* (install via Manager) and *Disabled*, with a temporary **Enable 7d** trial that auto-disables packages left unused
-- **Mirror search** — a standalone palette (⌕ button / `Ctrl/Cmd+Shift+D`) that searches nodes belonging to currently-disabled packages, previews the owning package + its sibling nodes, and re-enables them on the spot
+- **Mirror search** — a standalone palette (⌕ button / `Ctrl/Cmd+Shift+D`) that searches nodes belonging to currently-disabled packages, draws an imitation node box (real inputs/widgets/outputs, parsed from source), and re-enables the pack on the spot
 - **Non-blocking** — DB writes happen in a background thread, no impact on workflow execution
 
 ## Package Classification
@@ -121,9 +121,13 @@ package* and lets you re-enable the owning package right from the results.
   substring, finally pack-name matches) and show the `class_type` and its pack.
 - Hover a result (or use ↑/↓) to open a **preview panel** on the right with the
   owning package's title, author, description, repo link, and the full list of
-  sibling nodes in that pack — the active node highlighted. (A true rendered node
-  graphic isn't possible here: the pack is disabled, so ComfyUI hasn't loaded the
-  node's slot definition; the panel shows the package metadata we do have.)
+  sibling nodes in that pack — the active node highlighted.
+- **Click a node's name** (or *Draw this node*) to render an **imitation node
+  box** — the real input sockets, widget defaults, and output sockets, drawn from
+  a static parse of the disabled pack's source. Since the pack isn't loaded,
+  there's no live definition to render; the backend AST-parses the pack on disk
+  (read-only, never executed) to recover the schema. Works for most packs (~90%);
+  packs that build their node list dynamically fall back to a placeholder box.
 - Each result offers **Enable 7d** (re-enable under a 7-day trial) and **Enable**
   (re-enable permanently) — in the row and in the preview panel — the same enable
   path as the Workflow tab.
@@ -147,6 +151,7 @@ a clear message) when ComfyUI Manager is absent or there are no disabled package
 | `/nodes-stats/packages` | GET | Per-package aggregated stats with classification |
 | `/nodes-stats/usage` | GET | Raw per-node usage data |
 | `/nodes-stats/models` | GET | Per-type model stats with classification |
+| `/nodes-stats/node-schema` | GET | Parsed input/output schema for one disabled-pack node — query `class_type`, `pack` (read-only AST parse) |
 | `/nodes-stats/reset` | POST | Clear all tracked data |
 | `/nodes-stats/trials` | GET | Active temporary-enable trials with `days_remaining`/`expired` |
 | `/nodes-stats/trials/start` | POST | Begin/restart a trial — body `{"package": "<dir-name>"}` |
@@ -268,7 +273,8 @@ timeout so the kernel keeps the listing warm across restarts, e.g.
 __init__.py                     Entry point: prompt handler, API routes
 mapper.py                       class_type → package mapping; model filename → type mapping
 tracker.py                      SQLite persistence and stats aggregation
-js/nodes_stats.js               Frontend: menu button + stats dialog (Nodes/Models/Workflow tabs)
+node_introspect.py              Read-only AST parse of disabled packs → node input/output schema
+js/nodes_stats.js               Frontend: menu button + stats dialog (Nodes/Models/Workflow tabs) + mirror search
 tools/diagnose_model_scan.py    Standalone: diagnose slow model-folder scans at boot
 pyproject.toml                  Package metadata
 tests/                          Unit tests for tracker and mapper
