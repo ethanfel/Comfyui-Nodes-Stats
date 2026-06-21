@@ -181,13 +181,35 @@ All data is stored in `<ComfyUI user dir>/nodes_stats/usage_stats.db` (survives 
 
 Use `POST /nodes-stats/reset` to clear all data and start fresh.
 
+## Slow ComfyUI boot? Diagnose the model-folder scan
+
+If ComfyUI is slow to start at the "scanning model folders" / "Building node
+definitions" stage, the cause is almost always model folders on a slow (often
+network) filesystem: ComfyUI walks every registered model folder on each boot,
+and that cache is in-memory only (lost on restart).
+
+`tools/diagnose_model_scan.py` measures this the same way ComfyUI does and ranks
+the folders by scan cost, flags network mounts and their `actimeo`/`cache`
+options, and points at the worst offender. It is read-only.
+
+```bash
+cd /path/to/ComfyUI
+python tools/diagnose_model_scan.py            # 30s cap per folder
+python tools/diagnose_model_scan.py --timeout 600 --warm   # full timing + warm pass
+```
+
+Typical fix for network-mounted model folders (CIFS): raise the attribute-cache
+timeout so the kernel keeps the listing warm across restarts, e.g.
+`actimeo=3600,acdirmax=3600,acregmax=3600,cache=loose`.
+
 ## File Structure
 
 ```
-__init__.py        Entry point: prompt handler, API routes
-mapper.py          class_type → package mapping; model filename → type mapping
-tracker.py         SQLite persistence and stats aggregation
-js/nodes_stats.js  Frontend: menu button + stats dialog (Nodes/Models tabs)
-pyproject.toml     Package metadata
-tests/             Unit tests for tracker and mapper
+__init__.py                     Entry point: prompt handler, API routes
+mapper.py                       class_type → package mapping; model filename → type mapping
+tracker.py                      SQLite persistence and stats aggregation
+js/nodes_stats.js               Frontend: menu button + stats dialog (Nodes/Models tabs)
+tools/diagnose_model_scan.py    Standalone: diagnose slow model-folder scans at boot
+pyproject.toml                  Package metadata
+tests/                          Unit tests for tracker and mapper
 ```
