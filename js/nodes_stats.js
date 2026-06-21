@@ -69,24 +69,32 @@ function unresolvedNodeTypes() {
   return [...types];
 }
 
+// Latest workflow scan, shared so showStatsDialog can render the Workflow tab.
+let _lastWorkflowScan = { disabled: [], missing: [] };
+
 async function onWorkflowLoaded() {
-  const unresolved = unresolvedNodeTypes();
-  if (unresolved.length) console.log("[Node Stats] unresolved:", unresolved);
+  const types = unresolvedNodeTypes();
+  _lastWorkflowScan = await classifyUnresolved(types);
+  if (_lastWorkflowScan.disabled.length || _lastWorkflowScan.missing.length) {
+    showStatsDialog("workflow"); // auto-open on the Workflow tab
+  }
 }
 
-async function showStatsDialog() {
-  let data, modelData, managerInfo;
+async function showStatsDialog(initialTab = "nodes") {
+  let data, modelData, managerInfo, trials = [];
   try {
-    const [pkgResp, modelResp, mgr] = await Promise.all([
+    const [pkgResp, modelResp, mgr, trialsResp] = await Promise.all([
       fetch("/nodes-stats/packages"),
       fetch("/nodes-stats/models"),
       fetchManagerInfo(),
+      fetch("/nodes-stats/trials").catch(() => null),
     ]);
     if (!pkgResp.ok) { alert("Failed to load node stats: HTTP " + pkgResp.status); return; }
     if (!modelResp.ok) { alert("Failed to load model stats: HTTP " + modelResp.status); return; }
     data = await pkgResp.json();
     modelData = await modelResp.json();
     managerInfo = mgr;
+    if (trialsResp && trialsResp.ok) { try { trials = await trialsResp.json(); } catch { trials = []; } }
     if (!Array.isArray(data) || !Array.isArray(modelData)) {
       alert("Failed to load stats: unexpected response format");
       return;
@@ -132,6 +140,10 @@ async function showStatsDialog() {
       style="background:none;border:none;border-bottom:2px solid transparent;color:#888;padding:8px 18px;cursor:pointer;font-family:monospace;font-size:13px;">
       Models
     </button>
+    <button id="ns-tab-workflow"
+      style="background:none;border:none;border-bottom:2px solid transparent;color:#888;padding:8px 18px;cursor:pointer;font-family:monospace;font-size:13px;">
+      Workflow
+    </button>
   </div>`;
 
   // Nodes tab content
@@ -144,25 +156,29 @@ async function showStatsDialog() {
   html += buildModelsTabContent(modelData);
   html += `</div>`;
 
+  // Workflow tab content (missing / disabled nodes in the loaded workflow)
+  html += `<div id="ns-content-workflow" style="display:none;">`;
+  html += buildWorkflowTabContent(_lastWorkflowScan, trials);
+  html += `</div>`;
+
   dialog.innerHTML = html;
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
 
   // Tab switch — local function, no window pollution
+  const TABS = ["nodes", "models", "workflow"];
   function switchTab(tab) {
-    dialog.querySelector("#ns-content-nodes").style.display = tab === "nodes" ? "" : "none";
-    dialog.querySelector("#ns-content-models").style.display = tab === "models" ? "" : "none";
-    const nodeBtn = dialog.querySelector("#ns-tab-nodes");
-    const modelBtn = dialog.querySelector("#ns-tab-models");
-    nodeBtn.style.borderBottomColor = tab === "nodes" ? "#4a4" : "transparent";
-    nodeBtn.style.color = tab === "nodes" ? "#4a4" : "#888";
-    nodeBtn.style.fontWeight = tab === "nodes" ? "bold" : "normal";
-    modelBtn.style.borderBottomColor = tab === "models" ? "#4a4" : "transparent";
-    modelBtn.style.color = tab === "models" ? "#4a4" : "#888";
-    modelBtn.style.fontWeight = tab === "models" ? "bold" : "normal";
+    for (const t of TABS) {
+      dialog.querySelector(`#ns-content-${t}`).style.display = t === tab ? "" : "none";
+      const b = dialog.querySelector(`#ns-tab-${t}`);
+      b.style.borderBottomColor = t === tab ? "#4a4" : "transparent";
+      b.style.color = t === tab ? "#4a4" : "#888";
+      b.style.fontWeight = t === tab ? "bold" : "normal";
+    }
   }
-  dialog.querySelector("#ns-tab-nodes").addEventListener("click", () => switchTab("nodes"));
-  dialog.querySelector("#ns-tab-models").addEventListener("click", () => switchTab("models"));
+  for (const t of TABS) {
+    dialog.querySelector(`#ns-tab-${t}`).addEventListener("click", () => switchTab(t));
+  }
 
   dialog.querySelector("#nodes-stats-close").addEventListener("click", () => overlay.remove());
 
@@ -181,6 +197,9 @@ async function showStatsDialog() {
   });
 
   wireDisableButtons(dialog, managerInfo);
+  wireWorkflowButtons(dialog);
+
+  switchTab(TABS.includes(initialTab) ? initialTab : "nodes");
 
   // Easter egg: click "used" badge 5 times to show podium
   let eggClicks = 0;
@@ -339,6 +358,47 @@ function buildModelTable(models) {
   }
 
   html += `</tbody></table>`;
+  return html;
+}
+
+// Render the Workflow tab from a classification result. `disabled` entries get
+// re-enable actions (temporary trial or permanent); `missing` entries get an
+// Install button that defers to ComfyUI Manager.
+function buildWorkflowTabContent({ disabled, missing }, trials) {
+  const trialByPkg = Object.fromEntries((trials || []).map((t) => [t.package, t]));
+  let html = "";
+  if (!disabled.length && !missing.length) {
+    return `<p style="color:#666;">No missing or disabled nodes in the current workflow.</p>`;
+  }
+  if (disabled.length) {
+    html += sectionHeader("Disabled", "Installed but disabled — re-enable to use", "#e90");
+    html += `<table style="width:100%;border-collapse:collapse;margin-bottom:12px;"><tbody>`;
+    for (const d of disabled) {
+      const t = trialByPkg[d.pkg];
+      const note = t ? `<span style="color:#6a6;font-size:11px;">on trial · ${t.days_remaining}d left</span>` : "";
+      html += `<tr class="ns-row-consider_removing" style="border-bottom:1px solid #222;">
+        <td style="padding:6px 8px;color:#fff;">${escapeHtml(d.type)}</td>
+        <td style="padding:6px 8px;color:#888;">${escapeHtml(d.pkg)} ${note}</td>
+        <td style="padding:6px 8px;text-align:right;white-space:nowrap;">
+          <button class="ns-btn ns-enable-temp-btn" data-pkg="${escapeAttr(d.pkg)}">Enable 7d</button>
+          <button class="ns-btn ns-enable-perm-btn" data-pkg="${escapeAttr(d.pkg)}" style="margin-left:6px;">Enable</button>
+        </td></tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+  if (missing.length) {
+    html += sectionHeader("Missing", "Not installed — install via ComfyUI Manager", "#e44");
+    html += `<table style="width:100%;border-collapse:collapse;margin-bottom:12px;"><tbody>`;
+    for (const m of missing) {
+      html += `<tr class="ns-row-safe_to_remove" style="border-bottom:1px solid #222;">
+        <td style="padding:6px 8px;color:#fff;">${escapeHtml(m.type)}</td>
+        <td style="padding:6px 8px;color:#888;">${m.pkg ? escapeHtml(m.pkg) : "unknown"}</td>
+        <td style="padding:6px 8px;text-align:right;">
+          ${m.pkg ? `<button class="ns-btn ns-install-btn" data-pkg="${escapeAttr(m.pkg)}">Install</button>` : "&mdash;"}
+        </td></tr>`;
+    }
+    html += `</tbody></table>`;
+  }
   return html;
 }
 
@@ -513,6 +573,17 @@ function wireDisableButtons(dialog, managerInfo) {
       handleDisable(names, dialog, managerInfo);
     });
   });
+}
+
+// Wire the Workflow tab's enable/install buttons. Handlers are filled in by the
+// enable (Task 10) and install (Task 11) steps.
+function wireWorkflowButtons(dialog) {
+  dialog.querySelectorAll(".ns-enable-temp-btn").forEach((b) =>
+    b.addEventListener("click", (e) => { e.stopPropagation(); handleEnable(b.dataset.pkg, true, dialog); }));
+  dialog.querySelectorAll(".ns-enable-perm-btn").forEach((b) =>
+    b.addEventListener("click", (e) => { e.stopPropagation(); handleEnable(b.dataset.pkg, false, dialog); }));
+  dialog.querySelectorAll(".ns-install-btn").forEach((b) =>
+    b.addEventListener("click", (e) => { e.stopPropagation(); handleInstall(b.dataset.pkg, dialog); }));
 }
 
 async function handleDisable(pkgNames, dialog, managerInfo) {
