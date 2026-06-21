@@ -17,7 +17,7 @@ A ComfyUI custom node package that silently tracks which nodes, packages, and mo
 - **Expandable detail** — click any package to see individual node-level stats
 - **One-click disable** — disable unused packages straight from the dialog via ComfyUI Manager (per-package or in bulk), reversible at any time
 - **Workflow tab** — on loading a workflow, splits unresolved nodes into *Missing* (install via Manager) and *Disabled*, with a temporary **Enable 7d** trial that auto-disables packages left unused
-- **Mirror search** — a standalone palette (⌕ button / `Ctrl/Cmd+Shift+D`) that searches nodes belonging to currently-disabled packages and re-enables them on the spot
+- **Mirror search** — a standalone palette (⌕ button / `Ctrl/Cmd+Shift+D`) that searches nodes belonging to currently-disabled packages, previews the owning package + its sibling nodes, and re-enables them on the spot
 - **Non-blocking** — DB writes happen in a background thread, no impact on workflow execution
 
 ## Package Classification
@@ -119,15 +119,21 @@ package* and lets you re-enable the owning package right from the results.
   **`Ctrl/Cmd+Shift+D`** (ignored while typing in an input).
 - Type to filter — results are ranked (node-name prefix first, then word-start,
   substring, finally pack-name matches) and show the `class_type` and its pack.
+- Hover a result (or use ↑/↓) to open a **preview panel** on the right with the
+  owning package's title, author, description, repo link, and the full list of
+  sibling nodes in that pack — the active node highlighted. (A true rendered node
+  graphic isn't possible here: the pack is disabled, so ComfyUI hasn't loaded the
+  node's slot definition; the panel shows the package metadata we do have.)
 - Each result offers **Enable 7d** (re-enable under a 7-day trial) and **Enable**
-  (re-enable permanently) — the same enable path as the Workflow tab.
+  (re-enable permanently) — in the row and in the preview panel — the same enable
+  path as the Workflow tab.
 - Enabling takes effect after a ComfyUI restart; enabled rows mark
   *"✓ enabled · restart"*.
 
 The catalog is built once per session by joining ComfyUI Manager's node→pack
-mappings with the list of disabled packs, and cached; use the **↻** button to
-rebuild it. The palette is inert (with a clear message) when ComfyUI Manager is
-absent or there are no disabled packages.
+mappings with the disabled packs (matched across dir name, registry id, and repo
+URL), and cached; use the **↻** button to rebuild it. The palette is inert (with
+a clear message) when ComfyUI Manager is absent or there are no disabled packages.
 
 **Models tab**
 - Summary bar with counts for each tier across all model types

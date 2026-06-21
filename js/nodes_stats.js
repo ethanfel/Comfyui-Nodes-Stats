@@ -546,19 +546,36 @@ function buildDisabledCatalog(mappings, managerInfo) {
   }
   const catalog = [];
   const seen = new Set();
+  const packMeta = {};   // dir -> shared { pack, title, author, description, repo, version, info, nodes:[] }
   for (const [packKey, entry] of Object.entries(mappings || {})) {
     const rec = byAnyKey[normalizeRepoUrl(packKey)];
     if (!rec || rec.info.state !== "disabled") continue;
     const list = entry && entry[0];
     if (!Array.isArray(list)) continue;
-    const title = rec.info.title || rec.dir;
+    const m = (entry && entry[1]) || {};
+    let meta = packMeta[rec.dir];
+    if (!meta) {
+      const repo = (rec.info.files || []).find((f) => /^https?:\/\//i.test(f)) || "";
+      meta = packMeta[rec.dir] = {
+        pack: rec.dir,
+        title: m.title || m.title_aux || rec.info.title || rec.dir,
+        author: m.author || "",
+        description: m.description || "",
+        repo,
+        version: rec.info.version || "",
+        info: rec.info,
+        nodes: [],
+      };
+    }
     for (const ct of list) {
-      const dedup = rec.dir + " " + ct;
+      const dedup = rec.dir + "\n" + ct;
       if (seen.has(dedup)) continue;
       seen.add(dedup);
-      catalog.push({ class_type: ct, pack: rec.dir, title, info: rec.info });
+      meta.nodes.push(ct);
+      catalog.push({ class_type: ct, pack: rec.dir, title: meta.title, info: rec.info, meta });
     }
   }
+  for (const meta of Object.values(packMeta)) meta.nodes.sort((a, b) => a.localeCompare(b));
   return catalog;
 }
 
@@ -868,42 +885,105 @@ async function openMirrorSearch() {
 
   const box = document.createElement("div");
   box.style.cssText =
-    "margin-top:10vh;background:#1e1e1e;color:#ddd;border:1px solid #444;border-radius:8px;width:90%;max-width:640px;max-height:70vh;display:flex;flex-direction:column;font-family:monospace;font-size:13px;overflow:hidden;";
+    "margin-top:10vh;background:#1e1e1e;color:#ddd;border:1px solid #444;border-radius:8px;width:90%;max-width:880px;max-height:70vh;display:flex;flex-direction:column;font-family:monospace;font-size:13px;overflow:hidden;";
   box.innerHTML = `
     <style>
       #nodes-stats-mirror .ns-btn{font-family:monospace;font-size:11px;border:1px solid #555;background:#262626;color:#ddd;border-radius:4px;padding:3px 10px;cursor:pointer;white-space:nowrap;}
       #nodes-stats-mirror .ns-btn:hover:not(:disabled){background:#203a20;border-color:#4a4;color:#fff;}
       #nodes-stats-mirror .ns-btn:disabled{opacity:0.5;cursor:default;}
       #nodes-stats-mirror .ns-mrow:hover{background:#262626;}
+      #nodes-stats-mirror .ns-mrow.active{background:#1f2c1f;}
+      #nodes-stats-mirror a{color:#6a9bd8;}
     </style>
     <div style="padding:12px;border-bottom:1px solid #333;display:flex;gap:8px;align-items:center;">
       <input id="ns-mirror-input" placeholder="search disabled-pack nodes…" autocomplete="off"
         style="flex:1;background:#111;border:1px solid #444;border-radius:4px;color:#fff;padding:8px 10px;font-family:monospace;font-size:14px;outline:none;">
       <button id="ns-mirror-refresh" class="ns-btn" title="Rebuild catalog">↻</button>
     </div>
-    <div id="ns-mirror-results" style="overflow-y:auto;padding:6px 0;"></div>
+    <div style="display:flex;flex:1;min-height:0;overflow:hidden;">
+      <div id="ns-mirror-results" style="flex:1;min-width:0;overflow-y:auto;padding:6px 0;border-right:1px solid #333;"></div>
+      <div id="ns-mirror-preview" style="width:300px;flex-shrink:0;overflow-y:auto;padding:14px;color:#999;line-height:1.5;"></div>
+    </div>
     <div id="ns-mirror-footer" style="padding:8px 12px;border-top:1px solid #333;color:#666;font-size:11px;"></div>`;
   overlay.appendChild(box);
   document.body.appendChild(overlay);
 
   const input = box.querySelector("#ns-mirror-input");
   const results = box.querySelector("#ns-mirror-results");
+  const preview = box.querySelector("#ns-mirror-preview");
   const footer = box.querySelector("#ns-mirror-footer");
 
+  let currentRows = [];
+  let activeIndex = -1;
+
+  function clearPreview(msg) {
+    preview.innerHTML = `<div style="color:#666;">${escapeHtml(msg || "Hover a result to preview its package.")}</div>`;
+  }
+
+  // Preview panel for the active row. We can't render a real node graphic (the
+  // pack is disabled, so its definition isn't loaded), so we show the pack
+  // metadata we do have: title/author/description + the sibling nodes in the pack.
+  function renderPreview(entry) {
+    if (!entry) { clearPreview(); return; }
+    const m = entry.meta || {};
+    const sibs = m.nodes || [];
+    const CAP = 60;
+    const shown = sibs.slice(0, CAP);
+    const sibHtml = shown.map((n) => {
+      const me = n === entry.class_type;
+      return `<div style="padding:1px 0;color:${me ? "#fff" : "#9a9"};${me ? "font-weight:bold;" : ""}white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${me ? "▸ " : "· "}${escapeHtml(n)}</div>`;
+    }).join("") + (sibs.length > shown.length ? `<div style="color:#666;">+${sibs.length - shown.length} more</div>` : "");
+    const meta = [`<span style="color:#777;">pack</span><span style="color:#ccc;word-break:break-all;">${escapeHtml(entry.pack)}</span>`];
+    if (m.author) meta.push(`<span style="color:#777;">author</span><span style="color:#ccc;">${escapeHtml(m.author)}</span>`);
+    if (m.version) meta.push(`<span style="color:#777;">version</span><span style="color:#ccc;">${escapeHtml(String(m.version))}</span>`);
+    preview.innerHTML = `
+      <div style="color:#fff;font-size:14px;word-break:break-word;margin-bottom:10px;">${escapeHtml(entry.class_type)}</div>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:3px 8px;font-size:11px;margin-bottom:10px;">${meta.join("")}</div>
+      ${m.description ? `<div style="color:#aaa;font-size:11px;font-style:italic;border-left:2px solid #444;padding-left:8px;margin-bottom:10px;">${escapeHtml(m.description)}</div>` : ""}
+      ${m.repo ? `<div style="margin-bottom:12px;"><a href="${escapeAttr(m.repo)}" target="_blank" rel="noopener" style="font-size:11px;word-break:break-all;">${escapeHtml(m.repo)}</a></div>` : ""}
+      <div style="margin-bottom:10px;">
+        <button class="ns-btn ns-mirror-temp" data-pkg="${escapeAttr(entry.pack)}">Enable 7d</button>
+        <button class="ns-btn ns-mirror-perm" data-pkg="${escapeAttr(entry.pack)}" style="margin-left:6px;">Enable</button>
+      </div>
+      <div style="color:#777;font-size:11px;margin-bottom:4px;">${sibs.length} node${sibs.length !== 1 ? "s" : ""} in this pack</div>
+      <div style="font-size:11px;">${sibHtml}</div>`;
+    preview.querySelectorAll(".ns-mirror-temp").forEach((b) =>
+      b.addEventListener("click", () => mirrorEnable(b.dataset.pkg, true, overlay)));
+    preview.querySelectorAll(".ns-mirror-perm").forEach((b) =>
+      b.addEventListener("click", () => mirrorEnable(b.dataset.pkg, false, overlay)));
+  }
+
+  function setActive(i) {
+    if (!currentRows.length) { activeIndex = -1; clearPreview(); return; }
+    activeIndex = Math.max(0, Math.min(i, currentRows.length - 1));
+    const els = results.querySelectorAll(".ns-mrow");
+    els.forEach((el, idx) => el.classList.toggle("active", idx === activeIndex));
+    els[activeIndex]?.scrollIntoView({ block: "nearest" });
+    renderPreview(currentRows[activeIndex]);
+  }
+
   footer.textContent = "loading disabled-node catalog…";
+  clearPreview("Loading…");
   let catalog = await ensureDisabledCatalog();
-  if (catalog === null) { footer.textContent = "ComfyUI Manager not available."; return; }
-  if (catalog.length === 0) { footer.textContent = "No disabled packages — nothing to search."; return; }
+  if (catalog === null) { footer.textContent = "ComfyUI Manager not available."; clearPreview(" "); return; }
+  if (catalog.length === 0) { footer.textContent = "No disabled packages — nothing to search."; clearPreview(" "); return; }
   const packCount = new Set(catalog.map((e) => e.pack)).size;
   footer.textContent = `${catalog.length} nodes across ${packCount} disabled packs · enabling needs a restart`;
 
   function render() {
     const { rows, total } = filterCatalog(catalog, input.value);
+    currentRows = rows;
+    activeIndex = -1;
     if (!input.value.trim()) {
       results.innerHTML = `<div style="padding:14px;color:#666;">Type to search ${catalog.length} nodes in ${packCount} disabled packs.</div>`;
+      clearPreview();
       return;
     }
-    if (total === 0) { results.innerHTML = `<div style="padding:14px;color:#666;">No disabled nodes match “${escapeHtml(input.value)}”.</div>`; return; }
+    if (total === 0) {
+      results.innerHTML = `<div style="padding:14px;color:#666;">No disabled nodes match “${escapeHtml(input.value)}”.</div>`;
+      clearPreview("No match.");
+      return;
+    }
     let html = "";
     for (const e of rows) {
       html += `<div class="ns-mrow" style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid #222;">
@@ -921,9 +1001,16 @@ async function openMirrorSearch() {
       b.addEventListener("click", () => mirrorEnable(b.dataset.pkg, true, overlay)));
     results.querySelectorAll(".ns-mirror-perm").forEach((b) =>
       b.addEventListener("click", () => mirrorEnable(b.dataset.pkg, false, overlay)));
+    results.querySelectorAll(".ns-mrow").forEach((el, i) =>
+      el.addEventListener("mouseenter", () => setActive(i)));
+    setActive(0);
   }
 
   input.addEventListener("input", render);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setActive(activeIndex + 1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive(activeIndex - 1); }
+  });
   box.querySelector("#ns-mirror-refresh").addEventListener("click", async () => {
     footer.textContent = "refreshing…";
     catalog = await ensureDisabledCatalog(true) || [];
