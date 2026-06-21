@@ -53,3 +53,19 @@ def test_tick_reaches_expiry(tracker):
     assert t["unused_boot_days"] == DEFAULT_TRIAL_BUDGET
     assert t["expired"] is True
     assert t["days_remaining"] == 0
+
+
+def test_reset_zeroes_counter(tracker):
+    tracker.start_trial("Pack")
+    with patch("tracker.datetime") as m:
+        m.now.return_value = _ahead(1)
+        tracker.tick_boot_days()
+    assert tracker.get_trials()[0]["unused_boot_days"] == 1
+    tracker.reset_trials_for({"Pack", "Not-On-Trial"})
+    assert tracker.get_trials()[0]["unused_boot_days"] == 0
+
+
+def test_reset_empty_is_noop(tracker):
+    tracker.start_trial("Pack")
+    tracker.reset_trials_for(set())
+    assert tracker.get_trials()[0]["unused_boot_days"] == 0

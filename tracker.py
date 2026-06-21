@@ -450,6 +450,25 @@ class UsageTracker:
             finally:
                 conn.close()
 
+    def reset_trials_for(self, packages):
+        """Reset the unused-day counter for any of these packages that are on trial."""
+        if not packages:
+            return
+        today = datetime.now(timezone.utc).date().isoformat()
+        with self._lock:
+            self._ensure_db()
+            conn = self._connect()
+            try:
+                conn.executemany(
+                    """UPDATE trial_packages
+                       SET unused_boot_days = 0, last_use_day = ?
+                       WHERE package = ?""",
+                    [(today, p) for p in packages],
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
     def reset(self):
         """Clear all tracked data."""
         with self._lock:
