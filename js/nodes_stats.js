@@ -54,6 +54,10 @@ app.registerExtension({
         return r;
       };
     }
+
+    // Once the app has settled, auto-disable trial packages that went unused for
+    // their full budget of distinct boot-days. Inert when ComfyUI Manager is absent.
+    setTimeout(() => { processExpiredTrials().catch(() => {}); }, 3000);
   },
 });
 
@@ -751,6 +755,53 @@ function setWorkflowButtonsBusy(dialog, busy) {
   dialog.querySelectorAll(".ns-enable-temp-btn, .ns-enable-perm-btn, .ns-install-btn").forEach((b) => {
     b.disabled = busy;
   });
+}
+
+async function stopTrial(pkg) {
+  try {
+    await fetch("/nodes-stats/trials/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ package: pkg }),
+    });
+  } catch { /* best-effort; row ages out next session */ }
+}
+
+// On UI load, disable any trial package whose 7 distinct boot-days elapsed with
+// no use (the backend marks it expired). The disable goes through ComfyUI
+// Manager exactly like a manual disable; the trial row is then cleared. Inert
+// when Manager is absent. A package already disabled on disk just clears its row.
+async function processExpiredTrials() {
+  let trials = [];
+  try {
+    const r = await fetch("/nodes-stats/trials");
+    if (r.ok) trials = await r.json();
+  } catch { return; }
+
+  const expired = trials.filter((t) => t.expired);
+  if (!expired.length) return;
+
+  const mgr = await fetchManagerInfo();
+  if (!mgr) return; // Manager unavailable — leave rows for a later session
+
+  const done = [];
+  for (const t of expired) {
+    const info = mgr[t.package];
+    if (!info || info.state === "disabled") {
+      await stopTrial(t.package);
+      done.push(t.package);
+      continue;
+    }
+    try {
+      await runManagerDisable([disablePayload(t.package, info)]);
+      await stopTrial(t.package);
+      done.push(t.package);
+    } catch { /* keep the row; retry next session */ }
+  }
+
+  if (done.length) {
+    notify(`Auto-disabled ${done.length} unused trial package(s). Restart ComfyUI to apply.`, "info");
+  }
 }
 
 async function waitForQueue(timeoutMs = 60000) {
