@@ -549,6 +549,31 @@ async function ensureDisabledCatalog(forceRefresh = false) {
   return _disabledCatalog;
 }
 
+// Rank a catalog entry against a lowercased query. Lower = better; null = no match.
+// class_type prefix (0) < class_type word-start (1) < class_type substring (2)
+// < pack-name match (3). No match -> null.
+function scoreEntry(entry, q) {
+  const name = entry.class_type.toLowerCase();
+  if (name.startsWith(q)) return 0;
+  if (name.split(/[\s_\-./]/).some((w) => w.startsWith(q))) return 1;
+  if (name.includes(q)) return 2;
+  if (entry.pack.toLowerCase().includes(q)) return 3;
+  return null;
+}
+
+// Filter + rank a catalog. Returns { rows, total } where rows is capped at limit.
+function filterCatalog(catalog, query, limit = 50) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return { rows: [], total: 0 };
+  const scored = [];
+  for (const e of catalog) {
+    const s = scoreEntry(e, q);
+    if (s !== null) scored.push([s, e]);
+  }
+  scored.sort((a, b) => a[0] - b[0] || a[1].class_type.localeCompare(b[1].class_type));
+  return { rows: scored.slice(0, limit).map((x) => x[1]), total: scored.length };
+}
+
 // Split unresolved node types into packages that are installed-but-disabled
 // (re-enable to use) vs not installed (install via Manager). Reconciles
 // ComfyUI Manager's getmappings (class_type -> pack key) against getlist state.
