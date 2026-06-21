@@ -427,12 +427,61 @@ async function fetchManagerInfo() {
     for (const [key, v] of Object.entries(packs)) {
       if (!v || v.state === "not-installed") continue;
       // For installed packs the key is the directory name — matches our package names.
-      info[key] = { id: v.id || key, version: v.version, files: v.files, state: v.state };
+      // cnr_id/aux_id are kept so getmappings keys (which may be a registry id or
+      // repo URL rather than the dir name) can be reconciled in classifyUnresolved.
+      info[key] = {
+        id: v.id || key, version: v.version, files: v.files, state: v.state,
+        cnr_id: v.cnr_id, aux_id: v.aux_id,
+      };
     }
     return info;
   } catch {
     return null;
   }
+}
+
+// Split unresolved node types into packages that are installed-but-disabled
+// (re-enable to use) vs not installed (install via Manager). Reconciles
+// ComfyUI Manager's getmappings (class_type -> pack key) against getlist state.
+async function classifyUnresolved(types) {
+  if (!types.length) return { disabled: [], missing: [] };
+  let mappings = {}, managerInfo = null;
+  try {
+    const [mResp, gi] = await Promise.all([
+      fetch("/customnode/getmappings?mode=local"),
+      fetchManagerInfo(), // getlist -> {dir: {id, cnr_id, aux_id, version, files, state}}
+    ]);
+    if (mResp.ok) mappings = await mResp.json();
+    managerInfo = gi;
+  } catch { /* manager absent */ }
+
+  // class_type -> packKey. getmappings value is [ [class_types...], {meta} ];
+  // packKey is a directory name OR a repo/gist URL depending on the pack.
+  const typeToPack = {};
+  for (const [packKey, entry] of Object.entries(mappings)) {
+    for (const ct of (entry?.[0] || [])) typeToPack[ct] = packKey;
+  }
+
+  // Index installed/disabled packs by every identifier they expose (dir name,
+  // id, cnr_id, aux_id, and each repo URL) so a getmappings key in any of those
+  // forms resolves. URLs are normalized (drop trailing slash / .git, lowercase).
+  const norm = (s) => String(s).trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
+  const byAnyKey = {};
+  if (managerInfo) for (const [dir, info] of Object.entries(managerInfo)) {
+    const rec = { ...info, _dir: dir };
+    byAnyKey[norm(dir)] = rec;
+    for (const k of [info.id, info.cnr_id, info.aux_id]) if (k) byAnyKey[norm(k)] = rec;
+    for (const f of (info.files || [])) if (f) byAnyKey[norm(f)] = rec;
+  }
+
+  const disabled = [], missing = [];
+  for (const ct of types) {
+    const packKey = typeToPack[ct];
+    const info = packKey ? byAnyKey[norm(packKey)] : null;
+    if (info && info.state === "disabled") disabled.push({ type: ct, pkg: info._dir, info });
+    else missing.push({ type: ct, pkg: packKey || null });
+  }
+  return { disabled, missing };
 }
 
 // Build the payload ComfyUI Manager's /manager/queue/disable expects, mirroring
