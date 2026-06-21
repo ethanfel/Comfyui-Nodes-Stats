@@ -504,6 +504,51 @@ async function fetchManagerInfo() {
   }
 }
 
+// Normalize a repo URL for joining getmappings keys to getlist pack files.
+function normalizeRepoUrl(url) {
+  return String(url || "").trim().toLowerCase().replace(/\.git$/, "").replace(/\/+$/, "");
+}
+
+// Join Manager's node->pack mappings with the disabled packs from getlist.
+// mappings: { <repoUrl>: [ [class_type,...], {title_aux} ] }  (from getmappings)
+// managerInfo: { <dir>: {id,version,files,state,title?} }       (from fetchManagerInfo)
+// Returns [{ class_type, pack, title, info }] for disabled packs only.
+function buildDisabledCatalog(mappings, managerInfo) {
+  const byUrl = {};
+  for (const [url, entry] of Object.entries(mappings || {})) {
+    const list = entry && entry[0];
+    if (Array.isArray(list)) byUrl[normalizeRepoUrl(url)] = list;
+  }
+  const catalog = [];
+  for (const [dir, info] of Object.entries(managerInfo || {})) {
+    if (!info || info.state !== "disabled") continue;
+    const urls = (info.files && info.files.length ? info.files : [info.repository]).filter(Boolean);
+    let nodes = null;
+    for (const u of urls) {
+      const hit = byUrl[normalizeRepoUrl(u)];
+      if (hit) { nodes = hit; break; }
+    }
+    if (!nodes) { console.debug("[Node Stats] no node map for disabled pack", dir); continue; }
+    const title = info.title || dir;
+    for (const ct of nodes) catalog.push({ class_type: ct, pack: dir, title, info });
+  }
+  return catalog;
+}
+
+let _disabledCatalog = null;   // cached for the session
+async function ensureDisabledCatalog(forceRefresh = false) {
+  if (_disabledCatalog && !forceRefresh) return _disabledCatalog;
+  const managerInfo = await fetchManagerInfo();
+  if (!managerInfo) return null;           // Manager absent
+  let mappings = {};
+  try {
+    const r = await fetch("/customnode/getmappings?mode=local");
+    if (r.ok) mappings = await r.json();
+  } catch { /* fall through -> empty catalog */ }
+  _disabledCatalog = buildDisabledCatalog(mappings, managerInfo);
+  return _disabledCatalog;
+}
+
 // Split unresolved node types into packages that are installed-but-disabled
 // (re-enable to use) vs not installed (install via Manager). Reconciles
 // ComfyUI Manager's getmappings (class_type -> pack key) against getlist state.
