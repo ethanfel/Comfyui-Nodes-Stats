@@ -521,33 +521,43 @@ async function fetchManagerInfo() {
   }
 }
 
-// Normalize a repo URL for joining getmappings keys to getlist pack files.
+// Normalize an identifier (repo URL, dir name, or registry id) for joining
+// getmappings keys to getlist packs. Same ordering as classifyUnresolved's norm.
 function normalizeRepoUrl(url) {
-  return String(url || "").trim().toLowerCase().replace(/\.git$/, "").replace(/\/+$/, "");
+  return String(url || "").trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
 }
 
 // Join Manager's node->pack mappings with the disabled packs from getlist.
-// mappings: { <repoUrl>: [ [class_type,...], {title_aux} ] }  (from getmappings)
-// managerInfo: { <dir>: {id,version,files,state,title?} }       (from fetchManagerInfo)
-// Returns [{ class_type, pack, title, info }] for disabled packs only.
+// mappings: { <packKey>: [ [class_type,...], {title_aux} ] }   (from getmappings)
+// managerInfo: { <dir>: {id,version,files,state,cnr_id,aux_id} } (from fetchManagerInfo)
+// getmappings keys come in several forms (dir name, registry id, repo/gist URL),
+// and Manager keys the node map by dir/id far more often than by URL — so we
+// resolve each key against EVERY identifier a pack exposes, exactly as
+// classifyUnresolved does. Matching repo URLs alone misses the vast majority of
+// packs. Returns [{ class_type, pack, title, info }] for disabled packs only.
 function buildDisabledCatalog(mappings, managerInfo) {
-  const byUrl = {};
-  for (const [url, entry] of Object.entries(mappings || {})) {
-    const list = entry && entry[0];
-    if (Array.isArray(list)) byUrl[normalizeRepoUrl(url)] = list;
+  const byAnyKey = {};
+  for (const [dir, info] of Object.entries(managerInfo || {})) {
+    if (!info) continue;
+    const rec = { dir, info };
+    byAnyKey[normalizeRepoUrl(dir)] = rec;
+    for (const k of [info.id, info.cnr_id, info.aux_id]) if (k) byAnyKey[normalizeRepoUrl(k)] = rec;
+    for (const f of (info.files || [])) if (f) byAnyKey[normalizeRepoUrl(f)] = rec;
   }
   const catalog = [];
-  for (const [dir, info] of Object.entries(managerInfo || {})) {
-    if (!info || info.state !== "disabled") continue;
-    const urls = (info.files && info.files.length ? info.files : [info.repository]).filter(Boolean);
-    let nodes = null;
-    for (const u of urls) {
-      const hit = byUrl[normalizeRepoUrl(u)];
-      if (hit) { nodes = hit; break; }
+  const seen = new Set();
+  for (const [packKey, entry] of Object.entries(mappings || {})) {
+    const rec = byAnyKey[normalizeRepoUrl(packKey)];
+    if (!rec || rec.info.state !== "disabled") continue;
+    const list = entry && entry[0];
+    if (!Array.isArray(list)) continue;
+    const title = rec.info.title || rec.dir;
+    for (const ct of list) {
+      const dedup = rec.dir + " " + ct;
+      if (seen.has(dedup)) continue;
+      seen.add(dedup);
+      catalog.push({ class_type: ct, pack: rec.dir, title, info: rec.info });
     }
-    if (!nodes) { console.debug("[Node Stats] no node map for disabled pack", dir); continue; }
-    const title = info.title || dir;
-    for (const ct of nodes) catalog.push({ class_type: ct, pack: dir, title, info });
   }
   return catalog;
 }
