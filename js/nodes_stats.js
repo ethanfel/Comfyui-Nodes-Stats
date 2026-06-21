@@ -824,6 +824,108 @@ async function handleEnable(pkg, temporary, dialog) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Mirror search: a standalone palette over nodes of currently-disabled packs
+// ---------------------------------------------------------------------------
+
+async function openMirrorSearch() {
+  const existing = document.getElementById("nodes-stats-mirror");
+  if (existing) { existing.querySelector("#ns-mirror-input")?.focus(); return; }
+
+  const overlay = document.createElement("div");
+  overlay.id = "nodes-stats-mirror";
+  overlay.style.cssText =
+    "position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10001;display:flex;align-items:flex-start;justify-content:center;";
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") overlay.remove(); });
+
+  const box = document.createElement("div");
+  box.style.cssText =
+    "margin-top:10vh;background:#1e1e1e;color:#ddd;border:1px solid #444;border-radius:8px;width:90%;max-width:640px;max-height:70vh;display:flex;flex-direction:column;font-family:monospace;font-size:13px;overflow:hidden;";
+  box.innerHTML = `
+    <style>
+      #nodes-stats-mirror .ns-btn{font-family:monospace;font-size:11px;border:1px solid #555;background:#262626;color:#ddd;border-radius:4px;padding:3px 10px;cursor:pointer;white-space:nowrap;}
+      #nodes-stats-mirror .ns-btn:hover:not(:disabled){background:#203a20;border-color:#4a4;color:#fff;}
+      #nodes-stats-mirror .ns-btn:disabled{opacity:0.5;cursor:default;}
+      #nodes-stats-mirror .ns-mrow:hover{background:#262626;}
+    </style>
+    <div style="padding:12px;border-bottom:1px solid #333;display:flex;gap:8px;align-items:center;">
+      <input id="ns-mirror-input" placeholder="search disabled-pack nodes…" autocomplete="off"
+        style="flex:1;background:#111;border:1px solid #444;border-radius:4px;color:#fff;padding:8px 10px;font-family:monospace;font-size:14px;outline:none;">
+      <button id="ns-mirror-refresh" class="ns-btn" title="Rebuild catalog">↻</button>
+    </div>
+    <div id="ns-mirror-results" style="overflow-y:auto;padding:6px 0;"></div>
+    <div id="ns-mirror-footer" style="padding:8px 12px;border-top:1px solid #333;color:#666;font-size:11px;"></div>`;
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+
+  const input = box.querySelector("#ns-mirror-input");
+  const results = box.querySelector("#ns-mirror-results");
+  const footer = box.querySelector("#ns-mirror-footer");
+
+  footer.textContent = "loading disabled-node catalog…";
+  let catalog = await ensureDisabledCatalog();
+  if (catalog === null) { footer.textContent = "ComfyUI Manager not available."; return; }
+  if (catalog.length === 0) { footer.textContent = "No disabled packages — nothing to search."; return; }
+  const packCount = new Set(catalog.map((e) => e.pack)).size;
+  footer.textContent = `${catalog.length} nodes across ${packCount} disabled packs · enabling needs a restart`;
+
+  function render() {
+    const { rows, total } = filterCatalog(catalog, input.value);
+    if (!input.value.trim()) {
+      results.innerHTML = `<div style="padding:14px;color:#666;">Type to search ${catalog.length} nodes in ${packCount} disabled packs.</div>`;
+      return;
+    }
+    if (total === 0) { results.innerHTML = `<div style="padding:14px;color:#666;">No disabled nodes match “${escapeHtml(input.value)}”.</div>`; return; }
+    let html = "";
+    for (const e of rows) {
+      html += `<div class="ns-mrow" style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid #222;">
+        <div style="flex:1;min-width:0;">
+          <div style="color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(e.class_type)}</div>
+          <div style="color:#888;font-size:11px;">${escapeHtml(e.pack)}</div>
+        </div>
+        <button class="ns-btn ns-mirror-temp" data-pkg="${escapeAttr(e.pack)}">Enable 7d</button>
+        <button class="ns-btn ns-mirror-perm" data-pkg="${escapeAttr(e.pack)}">Enable</button>
+      </div>`;
+    }
+    if (total > rows.length) html += `<div style="padding:8px 12px;color:#666;">+${total - rows.length} more — refine your search.</div>`;
+    results.innerHTML = html;
+    results.querySelectorAll(".ns-mirror-temp").forEach((b) =>
+      b.addEventListener("click", () => mirrorEnable(b.dataset.pkg, true, overlay)));
+    results.querySelectorAll(".ns-mirror-perm").forEach((b) =>
+      b.addEventListener("click", () => mirrorEnable(b.dataset.pkg, false, overlay)));
+  }
+
+  input.addEventListener("input", render);
+  box.querySelector("#ns-mirror-refresh").addEventListener("click", async () => {
+    footer.textContent = "refreshing…";
+    catalog = await ensureDisabledCatalog(true) || [];
+    footer.textContent = `${catalog.length} nodes across ${new Set(catalog.map((e)=>e.pack)).size} disabled packs · enabling needs a restart`;
+    render();
+  });
+  render();
+  input.focus();
+}
+
+// Enable from the palette. Marks all rows for the pack as enabled on success.
+async function mirrorEnable(pkg, temporary, overlay) {
+  const entry = (_disabledCatalog || []).find((e) => e.pack === pkg);
+  const info = entry && entry.info;
+  if (!info) return;
+  overlay.querySelectorAll(".ns-btn").forEach((b) => (b.disabled = true));
+  try {
+    if (await enablePackage(pkg, info, temporary)) {
+      (_disabledCatalog || []).forEach((e) => { if (e.pack === pkg) e.info.state = "enabled"; });
+      overlay.querySelectorAll(`.ns-mirror-temp[data-pkg="${cssEscape(pkg)}"], .ns-mirror-perm[data-pkg="${cssEscape(pkg)}"]`)
+        .forEach((b) => { b.replaceWith(Object.assign(document.createElement("span"), { textContent: "✓ enabled · restart", style: "color:#6a6;font-size:11px;" })); });
+    }
+  } catch (e) {
+    notify("Failed to enable: " + e.message, "error");
+  } finally {
+    overlay.querySelectorAll(".ns-btn").forEach((b) => (b.disabled = false));
+  }
+}
+
 // Missing packages are deferred to ComfyUI Manager — the design treats "Missing"
 // as handled by Manager like always, and Manager already surfaces missing nodes
 // on workflow load. We intentionally do NOT replicate install: a not-installed
