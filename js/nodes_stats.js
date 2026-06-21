@@ -257,11 +257,11 @@ function renderSection(title, subtitle, status, packages, managerInfo) {
 }
 
 // A package can be disabled only if ComfyUI Manager knows it (by directory
-// name) and it is currently enabled (active on disk).
+// name) and it is currently active (any state other than already-disabled).
 function isDisableEligible(pkg, managerInfo) {
   if (!managerInfo || !pkg.installed) return false;
   const info = managerInfo[pkg.package];
-  return !!(info && info.enabled);
+  return !!(info && info.state && info.state !== "disabled");
 }
 
 function buildModelsTabContent(modelData) {
@@ -380,29 +380,43 @@ function buildTable(packages, status, withActions, managerInfo) {
 // ComfyUI Manager integration: disable unused node packages
 // ---------------------------------------------------------------------------
 
-// Map of installed packages from ComfyUI Manager:
-//   { <dir name>: { ver, cnr_id, aux_id, enabled }, ... }
-// Returns null when the Manager is not installed/reachable, in which case the
-// disable UI is omitted entirely.
+// Map of installed packages from ComfyUI Manager, keyed by directory name:
+//   { <dir name>: { id, version, files, state }, ... }
+// We read the unified list (/customnode/getlist) rather than /customnode/installed
+// because only the unified list reports the install *state version* the disable
+// endpoint needs: "nightly" for git installs, the semver for registry installs,
+// or "unknown". (/customnode/installed returns a raw git commit hash instead,
+// which the disable endpoint rejects.) This mirrors what Manager's own UI sends.
+// Returns null when the Manager is not installed/reachable, so the disable UI is
+// omitted entirely.
 async function fetchManagerInfo() {
   try {
-    const resp = await fetch("/customnode/installed");
+    const resp = await fetch("/customnode/getlist?mode=local&skip_update=true");
     if (!resp.ok) return null;
     const data = await resp.json();
-    return data && typeof data === "object" ? data : null;
+    const packs = data && data.node_packs;
+    if (!packs || typeof packs !== "object") return null;
+    const info = {};
+    for (const [key, v] of Object.entries(packs)) {
+      if (!v || v.state === "not-installed") continue;
+      // For installed packs the key is the directory name — matches our package names.
+      info[key] = { id: v.id || key, version: v.version, files: v.files, state: v.state };
+    }
+    return info;
   } catch {
     return null;
   }
 }
 
-// Build the payload ComfyUI Manager's /manager/queue/disable expects. CNR
-// (registry) packages are keyed by their cnr_id; everything else is treated as
-// "unknown" and keyed by directory name.
+// Build the payload ComfyUI Manager's /manager/queue/disable expects, mirroring
+// Manager's own frontend: id = directory name, version = install state
+// ("nightly" / semver / "unknown"), and files (repo URL) only for "unknown".
 function disablePayload(dirName, info) {
-  if (info && info.cnr_id && info.ver && info.ver !== "unknown") {
-    return { id: info.cnr_id, version: info.ver, ui_id: dirName };
+  const payload = { id: info.id || dirName, version: info.version, ui_id: dirName };
+  if (info.version === "unknown") {
+    payload.files = info.files && info.files.length ? info.files : [dirName];
   }
-  return { id: dirName, version: "unknown", files: [dirName], ui_id: dirName };
+  return payload;
 }
 
 function wireDisableButtons(dialog, managerInfo) {
@@ -426,9 +440,9 @@ function wireDisableButtons(dialog, managerInfo) {
 }
 
 async function handleDisable(pkgNames, dialog, managerInfo) {
-  // Only act on packages Manager still reports as enabled (guards against
+  // Only act on packages Manager still reports as active (guards against
   // double-clicks and stale buttons after a partial batch).
-  pkgNames = pkgNames.filter((n) => managerInfo[n] && managerInfo[n].enabled);
+  pkgNames = pkgNames.filter((n) => managerInfo[n] && managerInfo[n].state !== "disabled");
   if (pkgNames.length === 0) return;
 
   const what = pkgNames.length === 1 ? `"${pkgNames[0]}"` : `${pkgNames.length} packages`;
@@ -451,13 +465,13 @@ async function handleDisable(pkgNames, dialog, managerInfo) {
     await runManagerDisable(payloads);
 
     // Reconcile against Manager's actual state: a package is considered
-    // disabled only if it's no longer reported as enabled on disk.
+    // disabled only if it's no longer reported as active on disk.
     const after = await fetchManagerInfo();
-    const isStillEnabled = (n) => after && after[n] && after[n].enabled;
-    const succeeded = after ? pkgNames.filter((n) => !isStillEnabled(n)) : pkgNames;
+    const isStillActive = (n) => after && after[n] && after[n].state !== "disabled";
+    const succeeded = after ? pkgNames.filter((n) => !isStillActive(n)) : pkgNames;
     const failed = pkgNames.filter((n) => !succeeded.includes(n));
 
-    succeeded.forEach((n) => { if (managerInfo[n]) managerInfo[n].enabled = false; });
+    succeeded.forEach((n) => { if (managerInfo[n]) managerInfo[n].state = "disabled"; });
     markPackagesDisabled(dialog, succeeded);
     updateBulkButtons(dialog, managerInfo);
 
@@ -534,7 +548,7 @@ function updateBulkButtons(dialog, managerInfo) {
   dialog.querySelectorAll(".ns-disable-all-btn").forEach((btn) => {
     let names = [];
     try { names = JSON.parse(btn.dataset.pkgs); } catch { names = []; }
-    const remaining = names.filter((n) => managerInfo[n] && managerInfo[n].enabled);
+    const remaining = names.filter((n) => managerInfo[n] && managerInfo[n].state !== "disabled");
     if (remaining.length === 0) {
       btn.style.display = "none";
     } else {
