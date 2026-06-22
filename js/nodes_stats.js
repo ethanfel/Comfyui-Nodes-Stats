@@ -759,8 +759,10 @@ function wireWorkflowButtons(dialog) {
     b.addEventListener("click", (e) => { e.stopPropagation(); handleEnable(b.dataset.pkg, true, dialog); }));
   dialog.querySelectorAll(".ns-enable-perm-btn").forEach((b) =>
     b.addEventListener("click", (e) => { e.stopPropagation(); handleEnable(b.dataset.pkg, false, dialog); }));
-  dialog.querySelectorAll(".ns-install-btn").forEach((b) =>
-    b.addEventListener("click", (e) => { e.stopPropagation(); handleInstall(b.dataset.pkg, dialog); }));
+  dialog.querySelectorAll(".ns-install-temp-btn").forEach((b) =>
+    b.addEventListener("click", (e) => { e.stopPropagation(); handleTrialInstall(b.dataset.pkg, dialog, true); }));
+  dialog.querySelectorAll(".ns-install-perm-btn").forEach((b) =>
+    b.addEventListener("click", (e) => { e.stopPropagation(); handleTrialInstall(b.dataset.pkg, dialog, false); }));
 }
 
 async function handleDisable(pkgNames, dialog, managerInfo) {
@@ -1264,7 +1266,7 @@ async function handleTrialInstall(pkg, dialog, temporary) {
 }
 
 function setWorkflowButtonsBusy(dialog, busy) {
-  dialog.querySelectorAll(".ns-enable-temp-btn, .ns-enable-perm-btn, .ns-install-btn").forEach((b) => {
+  dialog.querySelectorAll(".ns-enable-temp-btn, .ns-enable-perm-btn, .ns-install-temp-btn, .ns-install-perm-btn").forEach((b) => {
     b.disabled = busy;
   });
 }
