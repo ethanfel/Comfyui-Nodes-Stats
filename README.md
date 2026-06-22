@@ -16,7 +16,7 @@ A ComfyUI custom node package that silently tracks which nodes, packages, and mo
 - **Uninstall detection** — removed packages/models are flagged separately, historical data preserved
 - **Expandable detail** — click any package to see individual node-level stats
 - **One-click disable** — disable unused packages straight from the dialog via ComfyUI Manager (per-package or in bulk), reversible at any time
-- **Workflow tab** — on loading a workflow, splits unresolved nodes into *Missing* (install via Manager) and *Disabled*, with a temporary **Enable 7d** trial that auto-disables packages left unused
+- **Workflow tab** — on loading a workflow, splits unresolved nodes into *Missing* (install permanently or on a trial) and *Disabled* (enable permanently or on a trial), with a rolling **7-day trial** that auto-disables packages left unused
 - **Mirror search** — a standalone palette (⌕ button / `Ctrl/Cmd+Shift+D`) that searches nodes belonging to currently-disabled packages, draws an imitation node box (real inputs/widgets/outputs, parsed from source), and re-enables the pack on the spot
 - **Non-blocking** — DB writes happen in a background thread, no impact on workflow execution
 
@@ -87,15 +87,22 @@ Whenever you load a workflow, the extension scans for node types the running
 ComfyUI can't resolve and, if any are found, opens the dialog on the **Workflow**
 tab. Unresolved nodes are split into two groups:
 
-- **Missing** — the owning package isn't installed. Install is handled by
-  [ComfyUI Manager](https://github.com/ltdrdata/ComfyUI-Manager) like always: the
-  **Install** button opens Manager's Custom Nodes Manager (use its *Missing*
-  filter).
+- **Missing** — the owning package isn't installed. Each row offers:
+  - **Install 7d** — really install the package (via
+    [ComfyUI Manager](https://github.com/ltdrdata/ComfyUI-Manager)) and start a
+    *temporary trial*, so trying out someone else's workflow stays
+    non-committal — anything you don't actually use auto-disables.
+  - **Install** — install permanently (no trial).
+
+  Both take effect after a ComfyUI restart. If the install can't be resolved or
+  Manager refuses it (e.g. a blocked git URL), the buttons fall back to opening
+  Manager's Custom Nodes Manager (use its *Missing* filter).
 - **Disabled** — the package is installed but currently disabled. Each row offers:
   - **Enable 7d** — re-enable the package and start a *temporary trial*.
   - **Enable** — re-enable permanently (no trial).
 
-**The temporary trial** is a rolling budget of **7 distinct boot-days**. A
+**The temporary trial** (started by either *Install 7d* or *Enable 7d*) is a
+rolling budget of **7 distinct boot-days**. A
 "boot-day" is counted at most once per calendar day, the first time ComfyUI
 starts that day — so the clock measures days you actually run ComfyUI, not wall
 time. **Any execution that uses the package resets the counter to zero.** If a
