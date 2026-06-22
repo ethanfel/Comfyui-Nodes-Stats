@@ -408,14 +408,17 @@ function buildWorkflowTabContent({ disabled, missing }, trials) {
     html += `</tbody></table>`;
   }
   if (missing.length) {
-    html += sectionHeader("Missing", "Not installed — install via ComfyUI Manager", "#e44");
+    html += sectionHeader("Missing", "Not installed — install, optionally on a 7-day trial", "#e44");
     html += `<table style="width:100%;border-collapse:collapse;margin-bottom:12px;"><tbody>`;
     for (const m of missing) {
       html += `<tr class="ns-row-safe_to_remove" style="border-bottom:1px solid #222;">
         <td style="padding:6px 8px;color:#fff;">${escapeHtml(m.type)}</td>
         <td style="padding:6px 8px;color:#888;">${m.pkg ? escapeHtml(m.pkg) : "unknown"}</td>
-        <td style="padding:6px 8px;text-align:right;">
-          ${m.pkg ? `<button class="ns-btn ns-install-btn" data-pkg="${escapeAttr(m.pkg)}">Install</button>` : "&mdash;"}
+        <td style="padding:6px 8px;text-align:right;white-space:nowrap;">
+          ${m.pkg
+            ? `<button class="ns-btn ns-install-temp-btn" data-pkg="${escapeAttr(m.pkg)}">Install 7d</button>
+               <button class="ns-btn ns-install-perm-btn" data-pkg="${escapeAttr(m.pkg)}" style="margin-left:6px;">Install</button>`
+            : "&mdash;"}
         </td></tr>`;
     }
     html += `</tbody></table>`;
