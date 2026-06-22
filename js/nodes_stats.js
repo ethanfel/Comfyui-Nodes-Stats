@@ -1225,6 +1225,41 @@ async function handleInstall(pkg, dialog) {
   );
 }
 
+// Real install of a missing pack, optionally on a 7-day trial. Resolves the
+// install spec, installs via Manager, discovers the resulting directory, and
+// (for a trial) registers it. Falls back to opening Manager on any failure.
+async function handleTrialInstall(pkg, dialog, temporary) {
+  if (await managerIsBusy()) {
+    notify("ComfyUI Manager is busy. Please try again in a moment.", "warn");
+    return;
+  }
+  const target = await resolveInstallTarget(pkg);
+  if (!target) { await handleInstall(pkg, dialog); return; }
+
+  setWorkflowButtonsBusy(dialog, true);
+  try {
+    await runManagerEnable(installPayload(target, pkg)); // shared /manager/queue/install flow
+    const dir = temporary ? await findInstalledDir(target) : null;
+    if (temporary && dir) {
+      await fetch("/nodes-stats/trials/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ package: dir }),
+      });
+    }
+    showRestartBanner(dialog);
+    if (temporary && !dir) {
+      notify(`Installed ${pkg}, but couldn't register the trial — manage it manually. Restart to load.`, "warn");
+    } else {
+      notify(`Installed ${pkg}${temporary ? " for a 7-day trial" : ""}. Restart ComfyUI to load it.`, "success");
+    }
+  } catch (e) {
+    notify("Install failed: " + e.message + " — opening ComfyUI Manager.", "warn");
+    await handleInstall(pkg, dialog);
+  } finally {
+    setWorkflowButtonsBusy(dialog, false);
+  }
+}
+
 function setWorkflowButtonsBusy(dialog, busy) {
   dialog.querySelectorAll(".ns-enable-temp-btn, .ns-enable-perm-btn, .ns-install-btn").forEach((b) => {
     b.disabled = busy;
