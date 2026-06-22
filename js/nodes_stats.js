@@ -621,6 +621,11 @@ function filterCatalog(catalog, query, limit = 50) {
 // Split unresolved node types into packages that are installed-but-disabled
 // (re-enable to use) vs not installed (install via Manager). Reconciles
 // ComfyUI Manager's getmappings (class_type -> pack key) against getlist state.
+// Normalize an identifier (dir name, registry id, or repo URL) for matching.
+function normKey(s) {
+  return String(s).trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
+}
+
 async function classifyUnresolved(types) {
   if (!types.length) return { disabled: [], missing: [] };
   let mappings = {}, managerInfo = null;
@@ -643,7 +648,7 @@ async function classifyUnresolved(types) {
   // Index installed/disabled packs by every identifier they expose (dir name,
   // id, cnr_id, aux_id, and each repo URL) so a getmappings key in any of those
   // forms resolves. URLs are normalized (drop trailing slash / .git, lowercase).
-  const norm = (s) => String(s).trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
+  const norm = normKey;
   const byAnyKey = {};
   if (managerInfo) for (const [dir, info] of Object.entries(managerInfo)) {
     const rec = { ...info, _dir: dir };
@@ -660,6 +665,57 @@ async function classifyUnresolved(types) {
     else missing.push({ type: ct, pkg: packKey || null });
   }
   return { disabled, missing };
+}
+
+// Find the not-installed getlist entry for a missing pack key (from getmappings).
+// Returns { key, id?, version, files, repository, ... } or null.
+async function resolveInstallTarget(packKey) {
+  let packs;
+  try {
+    const r = await fetch("/customnode/getlist?mode=local&skip_update=true");
+    if (!r.ok) return null;
+    packs = (await r.json()).node_packs;
+  } catch { return null; }
+  if (!packs) return null;
+  const want = normKey(packKey);
+  for (const [key, v] of Object.entries(packs)) {
+    if (!v || v.state !== "not-installed") continue;
+    const ids = [key, v.id, v.repository, ...(v.files || [])].filter(Boolean).map(normKey);
+    if (ids.includes(want)) return { key, ...v };
+  }
+  return null;
+}
+
+// Build the /manager/queue/install payload, mirroring Manager's installNodes.
+function installPayload(entry, packKey) {
+  const unknown = !entry.version || entry.version === "unknown";
+  const id = entry.id || packKey;
+  return {
+    id, version: entry.version || "unknown", files: entry.files,
+    channel: "default", mode: "cache",
+    selected_version: unknown ? "unknown" : "latest",
+    skip_post_install: false, ui_id: id,
+  };
+}
+
+// After install, find the now-installed directory name (the trial key) by
+// re-reading getlist and matching the entry; fall back to the repo basename.
+async function findInstalledDir(entry) {
+  let packs = null;
+  try {
+    const r = await fetch("/customnode/getlist?mode=local&skip_update=true");
+    if (r.ok) packs = (await r.json()).node_packs;
+  } catch { /* fall through to basename */ }
+  if (packs) {
+    const want = [entry.id, entry.repository, ...(entry.files || [])].filter(Boolean).map(normKey);
+    for (const [key, v] of Object.entries(packs)) {
+      if (!v || v.state === "not-installed") continue;
+      const cand = [key, v.id, v.repository, ...(v.files || [])].filter(Boolean).map(normKey);
+      if (cand.some((c) => want.includes(c))) return key; // key = directory name
+    }
+  }
+  const url = (entry.files && entry.files[0]) || entry.repository || "";
+  return url.replace(/\/+$/, "").replace(/\.git$/i, "").split("/").pop() || null;
 }
 
 // Build the payload ComfyUI Manager's /manager/queue/disable expects, mirroring
