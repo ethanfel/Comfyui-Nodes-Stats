@@ -81,6 +81,13 @@ package, plus a **Disable all** button per section. Disabling:
 
 If ComfyUI Manager is not installed, the disable buttons are hidden and stats work as before.
 
+> **Manager compatibility:** works with both the standalone
+> [ComfyUI-Manager](https://github.com/ltdrdata/ComfyUI-Manager) custom node and
+> ComfyUI core's built-in manager. For the built-in manager, launch ComfyUI with
+> `--enable-manager-legacy-ui` (the extension detects the active manager and its
+> API automatically). Without a reachable manager, all enable/disable/install
+> actions are simply omitted.
+
 ### Workflow tab & temporary enable
 
 Whenever you load a workflow, the extension scans for node types the running
