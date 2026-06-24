@@ -24,8 +24,34 @@ const STATUS_META = {
 // Tiers that may offer a "Disable" action (when ComfyUI Manager is available).
 const DISABLEABLE_TIERS = new Set(["safe_to_remove", "consider_removing"]);
 
+// Setting id for the auto-open-on-load behavior. Defaults to off so loading a
+// workflow with missing/disabled nodes no longer pops the dialog every time.
+const SETTING_AUTO_OPEN = "comfyui.nodes_stats.autoOpenOnLoad";
+
+function autoOpenEnabled() {
+  try {
+    const v = app.extensionManager?.setting?.get(SETTING_AUTO_OPEN);
+    if (v !== undefined) return !!v;
+    return !!app.ui?.settings?.getSettingValue?.(SETTING_AUTO_OPEN, false);
+  } catch {
+    return false;
+  }
+}
+
 app.registerExtension({
   name: "comfyui.nodes_stats",
+
+  settings: [
+    {
+      id: SETTING_AUTO_OPEN,
+      name: "Auto-open Node Stats on workflow load",
+      tooltip:
+        "Pop the Node Stats dialog (Workflow tab) automatically when a loaded workflow has missing or disabled nodes. Off by default — open it manually from the toolbar instead.",
+      type: "boolean",
+      defaultValue: false,
+      category: ["Node Stats", "Behavior", "Auto-open on load"],
+    },
+  ],
 
   async setup() {
     const btn = document.createElement("button");
@@ -96,6 +122,9 @@ let _lastWorkflowScan = { disabled: [], missing: [] };
 async function onWorkflowLoaded() {
   const types = unresolvedNodeTypes();
   _lastWorkflowScan = await classifyUnresolved(types);
+  // Only auto-open when the user has opted in; the scan is still kept up to date
+  // so the Workflow tab is accurate when opened manually from the toolbar.
+  if (!autoOpenEnabled()) return;
   if (_lastWorkflowScan.disabled.length || _lastWorkflowScan.missing.length) {
     showStatsDialog("workflow"); // auto-open on the Workflow tab
   }
