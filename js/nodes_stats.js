@@ -491,6 +491,43 @@ function buildTable(packages, status, withActions, managerInfo) {
 // ComfyUI Manager integration: disable unused node packages
 // ---------------------------------------------------------------------------
 
+// ComfyUI Manager ships in two HTTP API generations we support:
+//   • v3 — the standalone git custom_nodes/ComfyUI-Manager. Unprefixed paths
+//     (/customnode/..., /manager/...) and per-item queue endpoints
+//     (/manager/queue/install, /manager/queue/disable).
+//   • v4-legacy — the `comfyui_manager` package bundled with ComfyUI core, run
+//     with `--enable-manager-legacy-ui`. Same routes under a /v2 prefix, but the
+//     per-item install/disable endpoints are gone: everything is queued through
+//     one /v2/manager/queue/batch call ({install:[...], disable:[...]}) that
+//     also starts the worker.
+// We probe once (cheap queue/status, present in both) and cache which generation
+// answers, so every later call targets the right prefix + transport. null means
+// no Manager is reachable — the disable/enable/install UI is then omitted.
+let _managerApiProbe = null;
+function detectManagerApi() {
+  if (!_managerApiProbe) {
+    _managerApiProbe = (async () => {
+      for (const prefix of ["/v2", ""]) { // prefer v4-legacy; fall back to v3
+        try {
+          const r = await fetch(`${prefix}/manager/queue/status`);
+          if (r.ok) return { prefix, batch: prefix === "/v2" };
+        } catch { /* try next generation */ }
+      }
+      return null;
+    })();
+  }
+  return _managerApiProbe;
+}
+
+// Fetch a Manager endpoint on whichever generation is active, prefixing the path
+// as needed. Returns the Response, or null when no Manager is reachable (callers
+// treat null exactly like a failed/absent Manager).
+async function mgrFetch(path, opts) {
+  const api = await detectManagerApi();
+  if (!api) return null;
+  return fetch(api.prefix + path, opts);
+}
+
 // Map of installed packages from ComfyUI Manager, keyed by directory name:
 //   { <dir name>: { id, version, files, state }, ... }
 // We read the unified list (/customnode/getlist) rather than /customnode/installed
@@ -502,8 +539,8 @@ function buildTable(packages, status, withActions, managerInfo) {
 // omitted entirely.
 async function fetchManagerInfo() {
   try {
-    const resp = await fetch("/customnode/getlist?mode=local&skip_update=true");
-    if (!resp.ok) return null;
+    const resp = await mgrFetch("/customnode/getlist?mode=local&skip_update=true");
+    if (!resp || !resp.ok) return null;
     const data = await resp.json();
     const packs = data && data.node_packs;
     if (!packs || typeof packs !== "object") return null;
@@ -589,8 +626,8 @@ async function ensureDisabledCatalog(forceRefresh = false) {
   if (!managerInfo) return null;           // Manager absent
   let mappings = {};
   try {
-    const r = await fetch("/customnode/getmappings?mode=local");
-    if (r.ok) mappings = await r.json();
+    const r = await mgrFetch("/customnode/getmappings?mode=local");
+    if (r && r.ok) mappings = await r.json();
   } catch { /* fall through -> empty catalog */ }
   _disabledCatalog = buildDisabledCatalog(mappings, managerInfo);
   return _disabledCatalog;
@@ -634,10 +671,10 @@ async function classifyUnresolved(types) {
   let mappings = {}, managerInfo = null;
   try {
     const [mResp, gi] = await Promise.all([
-      fetch("/customnode/getmappings?mode=local"),
+      mgrFetch("/customnode/getmappings?mode=local"),
       fetchManagerInfo(), // getlist -> {dir: {id, cnr_id, aux_id, version, files, state}}
     ]);
-    if (mResp.ok) mappings = await mResp.json();
+    if (mResp && mResp.ok) mappings = await mResp.json();
     managerInfo = gi;
   } catch { /* manager absent */ }
 
@@ -675,8 +712,8 @@ async function classifyUnresolved(types) {
 async function resolveInstallTarget(packKey) {
   let packs;
   try {
-    const r = await fetch("/customnode/getlist?mode=local&skip_update=true");
-    if (!r.ok) return null;
+    const r = await mgrFetch("/customnode/getlist?mode=local&skip_update=true");
+    if (!r || !r.ok) return null;
     packs = (await r.json()).node_packs;
   } catch { return null; }
   if (!packs) return null;
@@ -706,8 +743,8 @@ function installPayload(entry, packKey) {
 async function findInstalledDir(entry) {
   let packs = null;
   try {
-    const r = await fetch("/customnode/getlist?mode=local&skip_update=true");
-    if (r.ok) packs = (await r.json()).node_packs;
+    const r = await mgrFetch("/customnode/getlist?mode=local&skip_update=true");
+    if (r && r.ok) packs = (await r.json()).node_packs;
   } catch { /* fall through to basename */ }
   if (packs) {
     const want = [entry.id, entry.repository, ...(entry.files || [])].filter(Boolean).map(normKey);
@@ -780,7 +817,7 @@ async function handleDisable(pkgNames, dialog, managerInfo) {
 
   setDisableButtonsBusy(dialog, true);
   try {
-    const pre = await fetch("/manager/queue/status").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    const pre = await mgrFetch("/manager/queue/status").then((r) => (r && r.ok ? r.json() : null)).catch(() => null);
     if (pre && pre.is_processing) {
       notify("ComfyUI Manager is busy. Please try again in a moment.", "warn");
       setDisableButtonsBusy(dialog, false);
@@ -815,9 +852,32 @@ async function handleDisable(pkgNames, dialog, managerInfo) {
   }
 }
 
+// v4-legacy: queue a batch of operations ({install:[...]}, {disable:[...]}, ...)
+// through the single endpoint that also starts the worker, then wait for it to
+// finish. A reset first clears any stale queue (harmless if empty).
+async function runManagerBatch(api, body) {
+  await fetch(api.prefix + "/manager/queue/reset", { method: "POST", headers: { "Content-Type": "application/json" } });
+  const r = await fetch(api.prefix + "/manager/queue/batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`queue batch failed (HTTP ${r.status})`);
+  await waitForQueue();
+}
+
 // Queue the disable tasks and run them, then wait for the Manager worker to
-// finish. /manager/queue/start returns 201 if a worker is already running.
+// finish. v4-legacy batches every item through one /v2/manager/queue/batch call;
+// v3 posts each item to /manager/queue/disable then /manager/queue/start (which
+// returns 201 if a worker is already running).
 async function runManagerDisable(payloads) {
+  const api = await detectManagerApi();
+  if (!api) throw new Error("ComfyUI Manager not available");
+  if (api.batch) {
+    await runManagerBatch(api, { disable: payloads });
+    return;
+  }
+
   await fetch("/manager/queue/reset", { method: "POST", headers: { "Content-Type": "application/json" } });
 
   for (const payload of payloads) {
@@ -864,8 +924,8 @@ function enablePayload(dirName, info) {
 // the same way before calling runManagerDisable).
 async function managerIsBusy() {
   try {
-    const r = await fetch("/manager/queue/status");
-    if (!r.ok) return false;
+    const r = await mgrFetch("/manager/queue/status");
+    if (!r || !r.ok) return false;
     const st = await r.json();
     return !!(st && st.is_processing);
   } catch {
@@ -873,7 +933,17 @@ async function managerIsBusy() {
   }
 }
 
+// Install a pack or re-enable a disabled one (both go through Manager's install
+// queue). v4-legacy batches it as {install:[payload]}; v3 posts the payload to
+// /manager/queue/install then /manager/queue/start.
 async function runManagerEnable(payload) {
+  const api = await detectManagerApi();
+  if (!api) throw new Error("ComfyUI Manager not available");
+  if (api.batch) {
+    await runManagerBatch(api, { install: [payload] });
+    return;
+  }
+
   await fetch("/manager/queue/reset", { method: "POST", headers: { "Content-Type": "application/json" } });
 
   const r = await fetch("/manager/queue/install", {
@@ -1328,8 +1398,8 @@ async function waitForQueue(timeoutMs = 60000) {
   while (Date.now() < deadline) {
     let st = null;
     try {
-      const r = await fetch("/manager/queue/status");
-      if (r.ok) st = await r.json();
+      const r = await mgrFetch("/manager/queue/status");
+      if (r && r.ok) st = await r.json();
     } catch { /* transient; retry */ }
     if (st && !st.is_processing && st.in_progress_count === 0) return;
     await sleep(500);
@@ -1396,7 +1466,7 @@ async function rebootComfy() {
   if (!confirm("Restart ComfyUI now? The server will go down briefly and the page will reconnect.")) return;
   notify("Restarting ComfyUI…", "info");
   try {
-    await fetch("/manager/reboot", { method: "POST", headers: { "Content-Type": "application/json" } });
+    await mgrFetch("/manager/reboot", { method: "POST", headers: { "Content-Type": "application/json" } });
   } catch {
     // The reboot tears down the connection, so a network error here is expected.
   }
